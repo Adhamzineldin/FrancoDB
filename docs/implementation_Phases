@@ -1,0 +1,4 @@
+1) create config file
+2) created page structure 
+3) created disk manager for I/O operations
+4) created buffer manager for caching pages in memory
