@@ -32,6 +32,15 @@ namespace francodb {
             }
             return -1;
         }
+        
+        int32_t GetColIdx(const std::string &col_name) const {
+            for (uint32_t i = 0; i < columns_.size(); ++i) {
+                if (columns_[i].GetName() == col_name) {
+                    return i;
+                }
+            }
+            return -1;
+        }
 
     private:
         std::vector<Column> columns_;

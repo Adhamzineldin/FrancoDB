@@ -11,9 +11,9 @@ namespace francodb {
             return ParseInsert();
         } else if (current_token_.type == TokenType::SELECT) {
             return ParseSelect();
-        } else if (current_token_.type == TokenType::UPDATE) {
+        } else if (current_token_.type == TokenType::UPDATE_CMD) {
             return ParseUpdate();
-        } else if (current_token_.type == TokenType::DELETE) {
+        } else if (current_token_.type == TokenType::DELETE_CMD) {
             return ParseDelete();
         }
 

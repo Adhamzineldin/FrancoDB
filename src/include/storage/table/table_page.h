@@ -49,6 +49,8 @@ namespace francodb {
 
         // Returns remaining free space in bytes
         uint32_t GetFreeSpaceRemaining();
+        
+        uint32_t GetTupleCount();
 
     private:
         // Helper to write/read header fields
@@ -67,7 +69,7 @@ namespace francodb {
         };
 
         // Private Helpers
-        uint32_t GetTupleCount();
+       
 
         void SetTupleCount(uint32_t count);
 

@@ -108,7 +108,7 @@ namespace francodb {
     // --- READ ---
     bool TablePage::GetTuple(const RID &rid, Tuple *tuple, Transaction *txn) {
         (void) txn;
-        uint32_t slot_id = rid.GetSlotNum();
+        uint32_t slot_id = rid.GetSlotId();
         if (slot_id >= GetTupleCount()) {
             return false;
         }
@@ -132,7 +132,7 @@ namespace francodb {
 
     bool TablePage::MarkDelete(const RID &rid, Transaction *txn) {
         (void) txn;
-        uint32_t slot_id = rid.GetSlotNum();
+        uint32_t slot_id = rid.GetSlotId();
         if (slot_id >= GetTupleCount()) {
             return false;
         }

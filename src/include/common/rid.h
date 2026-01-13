@@ -17,7 +17,7 @@ namespace francodb {
             : page_id_(page_id), slot_num_(slot_num) {}
 
         page_id_t GetPageId() const { return page_id_; }
-        uint32_t GetSlotNum() const { return slot_num_; }
+        uint32_t GetSlotId() const { return slot_num_; }
 
         void Set(page_id_t page_id, uint32_t slot_num) {
             page_id_ = page_id;

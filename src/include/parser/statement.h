@@ -7,7 +7,7 @@
 #include "common/value.h"
 
 namespace francodb {
-    enum class StatementType { CREATE, INSERT, SELECT, DELETE, UPDATE, DROP };
+    enum class StatementType { CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP };
 
     enum class LogicType { NONE, AND, OR };
 
@@ -67,7 +67,7 @@ namespace francodb {
 
     class UpdateStatement : public Statement {
     public:
-        StatementType GetType() const override { return StatementType::UPDATE; }
+        StatementType GetType() const override { return StatementType::UPDATE_CMD; }
         std::string table_name_;
         std::string target_column_;
         Value new_value_;
@@ -77,7 +77,7 @@ namespace francodb {
 
     class DeleteStatement : public Statement {
     public:
-        StatementType GetType() const override { return StatementType::DELETE; }
+        StatementType GetType() const override { return StatementType::DELETE_CMD; }
         std::string table_name_;
 
         std::vector<WhereCondition> where_clause_; // Upgrade

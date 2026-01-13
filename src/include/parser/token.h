@@ -9,9 +9,9 @@ namespace francodb {
         FROM,        // MEN
         WHERE,       // LAMA
         CREATE,      // 2E3MEL
-        DELETE,      // 2EMSA7
+        DELETE_CMD,      // 2EMSA7
         UPDATE_SET,  // 5ALY
-        UPDATE,      // 3ADEL
+        UPDATE_CMD,      // 3ADEL
         TABLE,       // GADWAL
         INSERT,      // EMLA
         INTO,        // GOWA

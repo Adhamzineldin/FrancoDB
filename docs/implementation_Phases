@@ -22,5 +22,9 @@ PHASE 5.5 COMPLETED ( FREE PAGE MANAGEMENT )
 PHASE 6 COMPLETED ( FQL LEXER )
 16) implemented a FQL PARSER to parse the tokenized query into an AST 
 17) insured parser is strict and follows the grammar rules
+PHASE 7 COMPLETED ( FQL PARSER  )
+18) implemented a FQL EXECUTER to execute the parsed AST and perform operations on the database
+PHASE 8 COMPLETED ( FQL Executer  )
+
 
 
