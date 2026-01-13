@@ -42,6 +42,8 @@ namespace francodb {
                 case TypeId::BOOLEAN: return "BOOLEAN";
                 case TypeId::INTEGER: return "INTEGER";
                 case TypeId::VARCHAR: return "VARCHAR";
+                case TypeId::DECIMAL: return "DECIMAL";
+                case TypeId::TIMESTAMP: return "TIMESTAMP";
                 default: return "UNKNOWN";
             }
         }

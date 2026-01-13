@@ -20,6 +20,7 @@ PHASE 5 COMPLETED ( SYSTEM CATALOGS AND TUPLES )
 PHASE 5.5 COMPLETED ( FREE PAGE MANAGEMENT )
 15) implemented a FQL LEXER to tokenize the input query
 PHASE 6 COMPLETED ( FQL LEXER )
-16) implemented a FQL PARSER to parse the tokenized query into an AST (To do)
+16) implemented a FQL PARSER to parse the tokenized query into an AST 
+17) insured parser is strict and follows the grammar rules
 
 

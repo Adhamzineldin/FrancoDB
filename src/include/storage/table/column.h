@@ -28,6 +28,8 @@ namespace francodb {
         std::string ToString() const {
             return name_ + ":" + Type::TypeToString(type_);
         }
+        
+        
 
     private:
         std::string name_;

@@ -4,106 +4,147 @@
 #include <algorithm>
 
 namespace francodb {
+    static const std::map<std::string, TokenType> kKeywords = {
+        {"2E5TAR", TokenType::SELECT},
+        {"MEN", TokenType::FROM},
+        {"LAMA", TokenType::WHERE},
+        {"2E3MEL", TokenType::CREATE},
+        {"2EMSA7",  TokenType::DELETE}, 
+        {"5ALY",    TokenType::UPDATE_SET},
+        {"3ADEL",  TokenType::UPDATE},
+        {"GADWAL", TokenType::TABLE},
+        {"EMLA", TokenType::INSERT},
+        {"GOWA", TokenType::INTO},
+        {"ELKEYAM", TokenType::VALUES},
+        {"RAKAM", TokenType::INT_TYPE},
+        {"ESM", TokenType::STRING_TYPE},
+        {"WE",     TokenType::AND},
+        {"AW",     TokenType::OR},
+        {"BOOL", TokenType::BOOL_TYPE},
+        {"TARE5",  TokenType::DATE_TYPE},
+        {"AH",      TokenType::TRUE_LIT},  // True
+        {"LA",      TokenType::FALSE_LIT},
+        {"KASR",    TokenType::DECIMAL_TYPE},
+        
+    };
 
-static const std::map<std::string, TokenType> kKeywords = {
-    {"2E5TAR", TokenType::SELECT},
-    {"MEN",    TokenType::FROM},
-    {"LAMA",   TokenType::WHERE},
-    {"2E3MEL", TokenType::CREATE},
-    {"GADWAL", TokenType::TABLE},
-    {"EMLA",   TokenType::INSERT},
-    {"GOWA",   TokenType::INTO},
-    {"ELKEYAM",TokenType::VALUES},
-    {"RAKAM",  TokenType::INT_TYPE},
-    {"ESM",    TokenType::STRING_TYPE}
-};
+    Token Lexer::NextToken() {
+        SkipWhitespace();
+        if (cursor_ >= input_.length()) return {TokenType::EOF_TOKEN, ""};
 
-Token Lexer::NextToken() {
-    SkipWhitespace();
-    if (cursor_ >= input_.length()) return {TokenType::EOF_TOKEN, ""};
+        char c = input_[cursor_];
 
-    char c = input_[cursor_];
+        // 1. Handle Words and Positive Numbers
+        if (std::isalnum(c)) {
+            return ReadIdentifierOrNumber();
+        }
 
-    // Handle alphanumeric blocks (Keywords like 2E5TAR, Identifiers, or pure Numbers)
-    if (std::isalnum(c)) {
-        return ReadIdentifierOrNumber();
+        // 2. NEW: Handle Negative Numbers (Start with '-')
+        // We verify: Is it a '-', and is the NEXT char a digit? (e.g. -5)
+        if (c == '-') {
+            if (cursor_ + 1 < input_.length() && std::isdigit(input_[cursor_ + 1])) {
+                return ReadIdentifierOrNumber();
+            }
+        }
+
+        // 3. Handle Strings
+        if (c == '\'') return ReadString();
+
+        // 4. Handle Symbols
+        cursor_++;
+        switch (c) {
+            case '*': return {TokenType::STAR, "*"};
+            case ',': return {TokenType::COMMA, ","};
+            case '(': return {TokenType::L_PAREN, "("};
+            case ')': return {TokenType::R_PAREN, ")"};
+            case ';': return {TokenType::SEMICOLON, ";"};
+            case '=': return {TokenType::EQUALS, "="};
+                // Note: If we support math later, independent '-' would go here.
+            default:  return {TokenType::INVALID, std::string(1, c)};
+        }
     }
-
-    // Handle string literals
-    if (c == '\'') return ReadString();
-
-    // Handle symbols
-    cursor_++;
-    switch (c) {
-        case '*': return {TokenType::STAR, "*"};
-        case ',': return {TokenType::COMMA, ","};
-        case '(': return {TokenType::L_PAREN, "("};
-        case ')': return {TokenType::R_PAREN, ")"};
-        case ';': return {TokenType::SEMICOLON, ";"};
-        case '=': return {TokenType::EQUALS, "="};
-        default:  return {TokenType::INVALID, std::string(1, c)};
-    }
-}
 
     Token Lexer::ReadIdentifierOrNumber() {
-    size_t start = cursor_;
-    bool has_letter = false;
+        size_t start = cursor_;
+        bool has_letter = false;
+        bool has_decimal_point = false;
 
-    while (cursor_ < input_.length() && (std::isalnum(input_[cursor_]) || input_[cursor_] == '_')) {
-        if (std::isalpha(input_[cursor_])) {
-            has_letter = true;
+        // Handle optional leading negative sign
+        if (input_[cursor_] == '-') {
+            cursor_++;
         }
-        cursor_++;
-    }
 
-    std::string text = input_.substr(start, cursor_ - start);
+        while (cursor_ < input_.length()) {
+            char c = input_[cursor_];
+        
+            // 1. Alphanumeric? Keep reading
+            if (std::isalnum(c) || c == '_') {
+                if (std::isalpha(c)) has_letter = true;
+                cursor_++;
+            } 
+            // 2. Decimal Point logic
+            else if (c == '.' && !has_letter && !has_decimal_point) {
+                if (cursor_ + 1 < input_.length() && std::isdigit(input_[cursor_ + 1])) {
+                    has_decimal_point = true;
+                    cursor_++;
+                } else {
+                    break; 
+                }
+            } 
+            else {
+                break; 
+            }
+        }
 
-    // --- CASE INSENSITIVITY LOGIC ---
-    std::string uppercase_text = text;
-    std::transform(uppercase_text.begin(), uppercase_text.end(), uppercase_text.begin(), ::toupper);
+        std::string text = input_.substr(start, cursor_ - start);
 
-    // 1. Check if the UPPERCASE version is a Franco Keyword
-    auto it = kKeywords.find(uppercase_text);
-    if (it != kKeywords.end()) {
-        return {it->second, text}; // Return original text but the Keyword type
-    }
-    // --------------------------------
+        // If it's a Keyword/Identifier, we check the map
+        // (Note: Identifiers usually don't start with -, so -5 is safe)
+        if (has_letter) {
+            // Uppercase conversion for Case Insensitivity
+            std::string upper_text = text;
+            std::transform(upper_text.begin(), upper_text.end(), upper_text.begin(), ::toupper);
 
-    // 2. If it's purely digits, it's a Number literal
-    if (!has_letter) {
+            auto it = kKeywords.find(upper_text);
+            if (it != kKeywords.end()) {
+                return {it->second, text}; 
+            }
+            return {TokenType::IDENTIFIER, text};
+        }
+
+        // If we are here, it's a number
+        if (has_decimal_point) {
+            return {TokenType::DECIMAL_LITERAL, text};
+        }
+
         return {TokenType::NUMBER, text};
     }
 
-    // 3. Otherwise, it's a regular name (Keep original case for table/column names)
-    return {TokenType::IDENTIFIER, text};
-}
-
-Token Lexer::ReadString() {
-    cursor_++; // Skip opening '
-    size_t start = cursor_;
-    while (cursor_ < input_.length() && input_[cursor_] != '\'') {
-        cursor_++;
+    Token Lexer::ReadString() {
+        cursor_++; // Skip opening '
+        size_t start = cursor_;
+        while (cursor_ < input_.length() && input_[cursor_] != '\'') {
+            cursor_++;
+        }
+        std::string text = input_.substr(start, cursor_ - start);
+        if (cursor_ < input_.length()) cursor_++; // Skip closing '
+        return {TokenType::STRING_LIT, text};
     }
-    std::string text = input_.substr(start, cursor_ - start);
-    if (cursor_ < input_.length()) cursor_++; // Skip closing '
-    return {TokenType::STRING_LIT, text};
-}
 
-void Lexer::SkipWhitespace() {
-    while (cursor_ < input_.length() && std::isspace(input_[cursor_])) {
-        cursor_++;
+    void Lexer::SkipWhitespace() {
+        while (cursor_ < input_.length() && std::isspace(input_[cursor_])) {
+            cursor_++;
+        }
     }
-}
 
-// Helper for bulk tokenization
-std::vector<Token> Lexer::Tokenize() {
-    std::vector<Token> tokens;
-    Token tok;
-    while ((tok = NextToken()).type != TokenType::EOF_TOKEN) {
-        tokens.push_back(tok);
+    // Helper for bulk tokenization
+    std::vector<Token> Lexer::Tokenize() {
+        std::vector<Token> tokens;
+        Token tok;
+        while ((tok = NextToken()).type != TokenType::EOF_TOKEN) {
+            tokens.push_back(tok);
+        }
+        tokens.push_back(tok); // Add EOF
+        return tokens;
     }
-    tokens.push_back(tok); // Add EOF
-    return tokens;
-}
-
 } // namespace francodb

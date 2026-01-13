@@ -1,153 +1,138 @@
 #pragma once
 
-#include <cstring>
-#include <string>
 #include <vector>
-#include <sstream>
+#include <string>
+#include <cstring>
 #include <iostream>
-
 #include "common/type.h"
 #include "common/exception.h"
 
 namespace francodb {
 
-/**
- * Value is a generic container for any type of data in the database.
- * It handles serialization (writing to tuple) and comparisons.
- */
 class Value {
 public:
-    // --- CONSTRUCTORS ---
+    // Default Constructor
+    Value() : type_id_(TypeId::INVALID), integer_(0) {}
+
+    // Integer / Boolean / Timestamp Constructor
+    Value(TypeId type, int32_t i) : type_id_(type), integer_(i) {}
+
+    // Decimal Constructor (For KASR)
+    Value(TypeId type, double d) : type_id_(type), decimal_(d) {}
+
+    // String Constructor
+    Value(TypeId type, const std::string &s) : type_id_(type) {
+        string_val_ = s;
+    }
+
+    // --- RULE OF THREE (Fixes Compiler Error) ---
     
-    // Invalid / Null Value
-    Value() : type_id_(TypeId::INVALID) { value_.integer_ = 0; }
-
-    // Integer
-    Value(TypeId type, int32_t i) : type_id_(type) {
-        if (type == TypeId::INTEGER) {
-            value_.integer_ = i;
-            size_ = 4;
-        } else if (type == TypeId::BOOLEAN) {
-            value_.boolean_ = (i != 0);
-            size_ = 1;
-        }
-    }
-
-    // String (Varchar)
-    Value(TypeId type, const std::string &val) : type_id_(type) {
-        size_ = val.length();
-        // Allocate memory for string
-        char *data = new char[size_ + 1];
-        memcpy(data, val.c_str(), size_);
-        data[size_] = '\0';
-        value_.varlen_ = data;
-    }
-
-    // Copy Constructor (Deep Copy for Strings)
+    // Copy Constructor
     Value(const Value &other) {
+        CopyFrom(other);
+    }
+
+    // Assignment Operator
+    Value &operator=(const Value &other) {
+        if (this != &other) {
+            CopyFrom(other);
+        }
+        return *this;
+    }
+    
+    // Helper for copying
+    void CopyFrom(const Value &other) {
         type_id_ = other.type_id_;
-        size_ = other.size_;
         if (type_id_ == TypeId::VARCHAR) {
-            char *data = new char[size_ + 1];
-            memcpy(data, other.value_.varlen_, size_);
-            data[size_] = '\0';
-            value_.varlen_ = data;
+            string_val_ = other.string_val_;
+        } else if (type_id_ == TypeId::DECIMAL) {
+            decimal_ = other.decimal_;
         } else {
-            value_ = other.value_;
+            integer_ = other.integer_;
         }
     }
 
-    // Destructor (Clean up string memory)
-    ~Value() {
-        if (type_id_ == TypeId::VARCHAR && value_.varlen_ != nullptr) {
-            delete[] value_.varlen_;
-        }
-    }
+    // --- GETTERS (Fixes Parser Test) ---
 
-    // --- ACCESSORS ---
-    
     TypeId GetTypeId() const { return type_id_; }
+    int32_t GetAsInteger() const { return integer_; }
+    double GetAsDouble() const { return decimal_; }
+    std::string GetAsString() const { return string_val_; }
 
-    int32_t GetAsInteger() const {
-        return value_.integer_;
-    }
+    // --- SERIALIZATION (Fixes Tuple.cpp Error) ---
 
-    std::string GetAsString() const {
-        if (type_id_ == TypeId::VARCHAR) {
-            return std::string(value_.varlen_, size_);
-        } else if (type_id_ == TypeId::INTEGER) {
-            return std::to_string(value_.integer_);
-        } else if (type_id_ == TypeId::BOOLEAN) {
-            return value_.boolean_ ? "true" : "false";
-        }
-        return "";
-    }
-
-    // --- SERIALIZATION ---
-    
-    // Write this Value into the raw tuple data at specific offset
-    void SerializeTo(char *storage) const {
-        if (type_id_ == TypeId::VARCHAR) {
-            // For Varchar, we write: [Length (4B)] [Chars...]
-            uint32_t len = size_;
-            memcpy(storage, &len, sizeof(uint32_t));
-            memcpy(storage + sizeof(uint32_t), value_.varlen_, size_);
-        } else {
-            // Fixed length (Int/Bool)
-            // Just copy the union bytes directly
-            if (type_id_ == TypeId::INTEGER) {
-                memcpy(storage, &value_.integer_, sizeof(int32_t));
-            } else if (type_id_ == TypeId::BOOLEAN) {
-                int8_t b = value_.boolean_ ? 1 : 0;
-                memcpy(storage, &b, sizeof(int8_t));
+    // Write this value into a raw byte buffer (for Disk)
+    void SerializeTo(char *dest) const {
+        switch (type_id_) {
+            case TypeId::INTEGER:
+            case TypeId::BOOLEAN:
+            case TypeId::TIMESTAMP:
+                std::memcpy(dest, &integer_, sizeof(int32_t));
+                break;
+            case TypeId::DECIMAL:
+                std::memcpy(dest, &decimal_, sizeof(double));
+                break;
+            case TypeId::VARCHAR: {
+                // For fixed-length char arrays in this simple engine
+                // We just copy the string bytes.
+                // Note: Tuple handles the length/offset management.
+                std::memcpy(dest, string_val_.c_str(), string_val_.length());
+                break;
             }
+            default:
+                break;
         }
     }
 
-    // Read a Value from raw tuple data
-    static Value DeserializeFrom(const char *storage, TypeId type_id) {
-        if (type_id == TypeId::INTEGER) {
-            int32_t val = *reinterpret_cast<const int32_t *>(storage);
-            return Value(TypeId::INTEGER, val);
-        } else if (type_id == TypeId::BOOLEAN) {
-            int8_t val = *reinterpret_cast<const int8_t *>(storage);
-            return Value(TypeId::BOOLEAN, (int32_t)val);
-        } else if (type_id == TypeId::VARCHAR) {
-            // Read Length first
-            uint32_t len = *reinterpret_cast<const uint32_t *>(storage);
-            // Read Chars
-            std::string str(storage + sizeof(uint32_t), len);
-            return Value(TypeId::VARCHAR, str);
+    // Read a value from a raw byte buffer (for Disk)
+    static Value DeserializeFrom(const char *src, TypeId type) {
+        switch (type) {
+            case TypeId::INTEGER: {
+                int32_t val;
+                std::memcpy(&val, src, sizeof(int32_t));
+                return Value(TypeId::INTEGER, val);
+            }
+            case TypeId::BOOLEAN: {
+                int32_t val; // Bool is stored as int 0 or 1
+                std::memcpy(&val, src, sizeof(int32_t));
+                return Value(TypeId::BOOLEAN, val);
+            }
+            case TypeId::TIMESTAMP: {
+                int32_t val;
+                std::memcpy(&val, src, sizeof(int32_t));
+                return Value(TypeId::TIMESTAMP, val);
+            }
+            case TypeId::DECIMAL: {
+                double val;
+                std::memcpy(&val, src, sizeof(double));
+                return Value(TypeId::DECIMAL, val);
+            }
+            case TypeId::VARCHAR: {
+                // In a real DB, we'd read the length prefix.
+                // Here, Tuple passes us the pointer to the string data.
+                // We assume null-termination or fixed length handling happens above.
+                // For this simple implementation, let's treat it as a C-string.
+                return Value(TypeId::VARCHAR, std::string(src));
+            }
+            default:
+                return Value();
         }
-        return Value();
     }
-    
-    // --- COMPARISON ---
-    // Returns true if this == other
-    bool CompareEquals(const Value &other) const {
-        if (type_id_ != other.type_id_) return false;
-        
-        if (type_id_ == TypeId::INTEGER) {
-            return value_.integer_ == other.value_.integer_;
-        }
-        if (type_id_ == TypeId::VARCHAR) {
-            // String compare
-            return GetAsString() == other.GetAsString();
-        }
-        return false;
+
+    friend std::ostream &operator<<(std::ostream &os, const Value &val) {
+        if (val.type_id_ == TypeId::VARCHAR) os << val.string_val_;
+        else if (val.type_id_ == TypeId::DECIMAL) os << val.decimal_;
+        else os << val.integer_;
+        return os;
     }
 
 private:
     TypeId type_id_;
-    uint32_t size_; // Length of data
-
-    // The Union holds the raw data efficiently
-    union Val {
+    union {
         int32_t integer_;
-        bool boolean_;
         double decimal_;
-        char *varlen_; // Pointer for strings
-    } value_;
+    };
+    std::string string_val_;
 };
 
 } // namespace francodb
