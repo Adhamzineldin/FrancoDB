@@ -43,5 +43,10 @@ add_executable(FrancoDB main.cpp
         "include/storage/index/b_plus_tree.h"
         include/concurrency/transaction.h
         include/storage/index/index_iterator.h
-        storage/index/b_plus_tree.cpp)
+        storage/index/b_plus_tree.cpp
+        include/storage/table/tuple.h
+        include/storage/table/table_page.h
+        storage/table/table_page.cpp
+        include/storage/table/table_heap.h
+        storage/table/table_heap.cpp)
 target_link_libraries(FrancoDB francodb_lib)

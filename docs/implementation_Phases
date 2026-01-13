@@ -1,4 +1,14 @@
 1) create config file
 2) created page structure 
 3) created disk manager for I/O operations
+PHASE 1 COMPLETED ( DISK MANAGER )
 4) created buffer manager for caching pages in memory
+PHASE 2 COMPLETED ( BUFFER MANAGER )
+5) created pages layout for b+ trees
+6) implemented b+ tree insertions 
+7) implemented b+ tree splitting
+PHASE 3 COMPLETED ( B+ TREE INDEXING )
+8) created table page structure
+9) implemented table heap file operations ( insert, delete, update, select )
+
+
