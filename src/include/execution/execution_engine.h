@@ -31,7 +31,13 @@ namespace francodb {
         }
         
         Transaction* GetCurrentTransaction() {
-            // Auto-begin transaction if none exists (auto-commit mode)
+            // Return current transaction if exists (for reads or explicit transactions)
+            // Returns nullptr if no transaction (SELECT can work without transaction)
+            return current_transaction_;
+        }
+        
+        Transaction* GetCurrentTransactionForWrite() {
+            // Always create transaction for write operations (INSERT, UPDATE, DELETE)
             if (current_transaction_ == nullptr) {
                 current_transaction_ = new Transaction(next_txn_id_++);
             }
@@ -71,6 +77,7 @@ namespace francodb {
                 }
                 case StatementType::SELECT: {
                     auto *select_stmt = dynamic_cast<SelectStatement *>(stmt);
+                    // SELECT doesn't need a transaction unless in explicit transaction block
                     ExecuteSelect(select_stmt);
                     break;
                 }
@@ -106,10 +113,11 @@ namespace francodb {
                 }
             }
             
-            // Auto-commit after statement (unless it was BEGIN/ROLLBACK/COMMIT)
-            if (stmt->GetType() != StatementType::BEGIN && 
-                stmt->GetType() != StatementType::ROLLBACK && 
-                stmt->GetType() != StatementType::COMMIT) {
+            // Auto-commit after WRITE statements only (INSERT, UPDATE, DELETE)
+            // Read statements (SELECT) don't need auto-commit
+            if (stmt->GetType() == StatementType::INSERT || 
+                stmt->GetType() == StatementType::UPDATE_CMD || 
+                stmt->GetType() == StatementType::DELETE_CMD) {
                 AutoCommitIfNeeded();
             }
         }
@@ -192,7 +200,7 @@ namespace francodb {
         }
 
         void ExecuteInsert(InsertStatement *stmt) {
-            InsertExecutor executor(exec_ctx_, stmt, GetCurrentTransaction());
+            InsertExecutor executor(exec_ctx_, stmt, GetCurrentTransactionForWrite());
             executor.Init();
             Tuple t;
             executor.Next(&t);
@@ -283,14 +291,14 @@ namespace francodb {
         }
 
         void ExecuteDelete(DeleteStatement *stmt) {
-            DeleteExecutor executor(exec_ctx_, stmt, GetCurrentTransaction());
+            DeleteExecutor executor(exec_ctx_, stmt, GetCurrentTransactionForWrite());
             executor.Init();
             Tuple t;
             executor.Next(&t);
         }
 
         void ExecuteUpdate(UpdateStatement *stmt) {
-            UpdateExecutor executor(exec_ctx_, stmt, GetCurrentTransaction());
+            UpdateExecutor executor(exec_ctx_, stmt, GetCurrentTransactionForWrite());
             executor.Init();
             Tuple t;
             executor.Next(&t);

@@ -39,5 +39,8 @@ EMLA GOWA users ELKEYAM (1, 'Ahmed', 'ahmed@example.com');
 -- Rollback (undoes the insert)
 2ERGA3;
 
+
+2e5tar * men users;
+
 -- Or commit
-KAMEL;
+2AKED;
