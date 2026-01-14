@@ -62,14 +62,29 @@ namespace francodb {
         int max_size = GetMaxSize();
         
         // Bounds checking: validate size is reasonable
-        if (size < 1 || size > max_size || max_size <= 0) {
-            // Return INVALID_PAGE_ID if size is invalid
+        // An internal node must have at least size 1 (one pointer)
+        if (size < 1) {
             return static_cast<ValueType>(INVALID_PAGE_ID);
         }
         
-        // Additional safety: ensure size doesn't exceed what could fit in a page
-        if (size > 300) {
-            return static_cast<ValueType>(INVALID_PAGE_ID); // Suspiciously large size
+        // Handle legacy indexes: if max_size is 0 (from old code), calculate a reasonable default
+        // This allows old indexes loaded from disk to still work
+        if (max_size <= 0) {
+            // Calculate default max_size: (PAGE_SIZE - 24) / (sizeof(KeyType) + sizeof(ValueType))
+            // For GenericKey<8> + page_id_t: (4096 - 24) / (8 + 4) = 4072 / 12 = 339
+            constexpr int default_max_size = (4096 - 24) / (sizeof(KeyType) + sizeof(ValueType));
+            max_size = default_max_size;
+        }
+        
+        // Check if size exceeds max_size (but allow legacy pages with uninitialized max_size)
+        if (size > max_size && max_size > 0) {
+            return static_cast<ValueType>(INVALID_PAGE_ID);
+        }
+        
+        // Special case: if size == 1, there's only one pointer (no keys to compare)
+        // This can happen in a degenerate tree, return the only pointer
+        if (size == 1) {
+            return array_[0].second;
         }
         
         // Start from 1 because index 0 key is invalid/placeholder
@@ -83,10 +98,6 @@ namespace francodb {
         }
         
         // If we went through the whole list and everything was smaller, it belongs to the last pointer.
-        // Validate that size - 1 is a valid index
-        if (size - 1 < 0) {
-            return static_cast<ValueType>(INVALID_PAGE_ID);
-        }
         return array_[size - 1].second;
     }
 

@@ -307,6 +307,12 @@ namespace francodb {
             auto *internal = reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *>(node);
             page_id_t child_id = internal->Lookup(key, comparator_);
             
+            // Validate child_id before fetching
+            if (child_id == INVALID_PAGE_ID || child_id < 0) {
+                buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
+                throw Exception(ExceptionType::OUT_OF_RANGE, "Invalid child page ID from Lookup");
+            }
+            
             buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
             
             leaf_page = buffer_pool_manager_->FetchPage(child_id);

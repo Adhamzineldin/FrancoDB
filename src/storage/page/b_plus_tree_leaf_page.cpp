@@ -81,17 +81,22 @@ namespace francodb {
         int max_size = GetMaxSize();
         
         // Bounds checking: validate size is reasonable
-        if (size < 0 || size > max_size || max_size <= 0) {
+        if (size < 0) {
             return false; // Invalid size, cannot lookup
         }
         
-        // Additional safety: ensure size doesn't exceed what could fit in a page
-        // PAGE_SIZE is 4096, header is ~24 bytes, next_page_id_ is 4 bytes
-        // So we have ~4068 bytes for data. Each MappingType is sizeof(KeyType) + sizeof(ValueType)
-        // For GenericKey<8> + RID, that's ~8 + 8 = 16 bytes per entry
-        // So max reasonable entries is ~254. Add some margin.
-        if (size > 300) {
-            return false; // Suspiciously large size, likely corruption
+        // Handle legacy indexes: if max_size is 0 (from old code), calculate a reasonable default
+        // This allows old indexes loaded from disk to still work
+        if (max_size <= 0) {
+            // Calculate default max_size: (PAGE_SIZE - 28) / (sizeof(KeyType) + sizeof(ValueType))
+            // For GenericKey<8> + RID: (4096 - 28) / (8 + 8) = 4068 / 16 = 254
+            constexpr int default_max_size = (4096 - 28) / (sizeof(KeyType) + sizeof(ValueType));
+            max_size = default_max_size;
+        }
+        
+        // Check if size exceeds max_size (but allow legacy pages with uninitialized max_size)
+        if (size > max_size && max_size > 0) {
+            return false; // Size exceeds maximum, likely corruption
         }
         
         for (int i = 0; i < size; i++) {
