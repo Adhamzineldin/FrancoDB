@@ -27,6 +27,11 @@ namespace francodb {
         {"KASR",    TokenType::DECIMAL_TYPE},
         {"FEHRIS", TokenType::INDEX},
         {"3ALA",   TokenType::ON},
+        {"ASASI", TokenType::PRIMARY_KEY},  // PRIMARY KEY keyword (used after RAKAM or MIFTAH)
+        {"MOFTA7", TokenType::PRIMARY_KEY}, // Alternative: MIFTAH ASASI (but we'll use ASASI separately)
+        {"2EBDA2", TokenType::BEGIN_TXN},     // BEGIN transaction
+        {"2ERGA3", TokenType::ROLLBACK},     // ROLLBACK transaction
+        {"2AKED", TokenType::COMMIT},       // COMMIT transaction
         
     };
 

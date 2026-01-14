@@ -13,15 +13,39 @@
 #include "executors/delete_executor.h"
 #include "executors/index_scan_executor.h"
 #include "executors/update_executor.h"
+#include "concurrency/transaction.h"
 
 namespace francodb {
     class ExecutionEngine {
     public:
         ExecutionEngine(BufferPoolManager *bpm, Catalog *catalog)
-            : catalog_(catalog), exec_ctx_(new ExecutorContext(catalog, bpm)) {
+            : catalog_(catalog), exec_ctx_(new ExecutorContext(catalog, bpm)), 
+              current_transaction_(nullptr), next_txn_id_(1), in_explicit_transaction_(false) {
         }
 
-        ~ExecutionEngine() { delete exec_ctx_; }
+        ~ExecutionEngine() { 
+            if (current_transaction_) {
+                delete current_transaction_;
+            }
+            delete exec_ctx_; 
+        }
+        
+        Transaction* GetCurrentTransaction() {
+            // Auto-begin transaction if none exists (auto-commit mode)
+            if (current_transaction_ == nullptr) {
+                current_transaction_ = new Transaction(next_txn_id_++);
+            }
+            return current_transaction_;
+        }
+        
+        // Auto-commit after statement execution (unless in explicit transaction)
+        void AutoCommitIfNeeded() {
+            if (!in_explicit_transaction_ && current_transaction_ != nullptr && 
+                current_transaction_->GetState() == Transaction::TransactionState::RUNNING) {
+                // Auto-commit after each statement in auto-commit mode
+                ExecuteCommit();
+            }
+        }
 
         void Execute(Statement *stmt) {
             if (stmt == nullptr) {
@@ -65,9 +89,28 @@ namespace francodb {
                     ExecuteUpdate(upd_stmt);
                     break;
                 }
+                case StatementType::BEGIN: {
+                    ExecuteBegin();
+                    break;
+                }
+                case StatementType::ROLLBACK: {
+                    ExecuteRollback();
+                    break;
+                }
+                case StatementType::COMMIT: {
+                    ExecuteCommit();
+                    break;
+                }
                 default: {
                     throw Exception(ExceptionType::EXECUTION, "Unknown Statement Type.");
                 }
+            }
+            
+            // Auto-commit after statement (unless it was BEGIN/ROLLBACK/COMMIT)
+            if (stmt->GetType() != StatementType::BEGIN && 
+                stmt->GetType() != StatementType::ROLLBACK && 
+                stmt->GetType() != StatementType::COMMIT) {
+                AutoCommitIfNeeded();
             }
         }
 
@@ -149,7 +192,7 @@ namespace francodb {
         }
 
         void ExecuteInsert(InsertStatement *stmt) {
-            InsertExecutor executor(exec_ctx_, stmt);
+            InsertExecutor executor(exec_ctx_, stmt, GetCurrentTransaction());
             executor.Init();
             Tuple t;
             executor.Next(&t);
@@ -175,7 +218,7 @@ namespace francodb {
                                 use_index = true;
                                 index_col_name = idx->name_;
                                 index_search_value = cond.value;
-                                executor = new IndexScanExecutor(exec_ctx_, stmt, idx, index_search_value);
+                                executor = new IndexScanExecutor(exec_ctx_, stmt, idx, index_search_value, GetCurrentTransaction());
                                 std::cout << "[OPTIMIZER] Using Index: " << idx->name_ << std::endl;
                                 break;
                             } catch (...) {
@@ -191,7 +234,7 @@ namespace francodb {
             // --- OPTIMIZER LOGIC END ---
 
             if (!use_index) {
-                executor = new SeqScanExecutor(exec_ctx_, stmt);
+                executor = new SeqScanExecutor(exec_ctx_, stmt, GetCurrentTransaction());
                 std::cout << "[OPTIMIZER] Using Sequential Scan" << std::endl;
             }
 
@@ -240,20 +283,145 @@ namespace francodb {
         }
 
         void ExecuteDelete(DeleteStatement *stmt) {
-            DeleteExecutor executor(exec_ctx_, stmt);
+            DeleteExecutor executor(exec_ctx_, stmt, GetCurrentTransaction());
             executor.Init();
             Tuple t;
             executor.Next(&t);
         }
 
         void ExecuteUpdate(UpdateStatement *stmt) {
-            UpdateExecutor executor(exec_ctx_, stmt);
+            UpdateExecutor executor(exec_ctx_, stmt, GetCurrentTransaction());
             executor.Init();
             Tuple t;
             executor.Next(&t);
         }
+        
+        void ExecuteBegin() {
+            if (current_transaction_ != nullptr && in_explicit_transaction_) {
+                throw Exception(ExceptionType::EXECUTION, "Transaction already in progress. Commit or rollback first.");
+            }
+            // Commit any auto-commit transaction first
+            if (current_transaction_ != nullptr) {
+                ExecuteCommit();
+            }
+            current_transaction_ = new Transaction(next_txn_id_++);
+            in_explicit_transaction_ = true;
+            std::cout << "[EXEC] Transaction started (ID: " << current_transaction_->GetTransactionId() << ")" << std::endl;
+        }
+        
+        void ExecuteRollback() {
+            if (current_transaction_ == nullptr || !in_explicit_transaction_) {
+                throw Exception(ExceptionType::EXECUTION, "No active transaction to rollback.");
+            }
+            
+            // Rollback all modifications in reverse order
+            const auto &modifications = current_transaction_->GetModifications();
+            
+            // Process modifications in reverse to handle UPDATEs correctly
+            // (UPDATE creates new_rid first, then tracks old_rid - we need to undo in reverse)
+            std::vector<std::pair<RID, Transaction::TupleModification>> mods_vec;
+            for (const auto &[rid, mod] : modifications) {
+                mods_vec.push_back({rid, mod});
+            }
+            // Reverse to process newest first
+            std::reverse(mods_vec.begin(), mods_vec.end());
+            
+            for (const auto &[rid, mod] : mods_vec) {
+                if (mod.table_name.empty()) continue; // Skip if no table name
+                
+                TableMetadata *table_info = catalog_->GetTable(mod.table_name);
+                if (table_info == nullptr) continue;
+                
+                if (mod.is_deleted) {
+                    // DELETE operation: Restore the tuple by unmarking delete
+                    table_info->table_heap_->UnmarkDelete(rid, nullptr);
+                    
+                    // Restore index entries
+                    auto indexes = catalog_->GetTableIndexes(mod.table_name);
+                    for (auto *index : indexes) {
+                        int col_idx = table_info->schema_.GetColIdx(index->col_name_);
+                        if (col_idx >= 0) {
+                            Value key_val = mod.old_tuple.GetValue(table_info->schema_, col_idx);
+                            GenericKey<8> key;
+                            key.SetFromValue(key_val);
+                            index->b_plus_tree_->Insert(key, rid, nullptr);
+                        }
+                    }
+                } else if (mod.old_tuple.GetLength() == 0) {
+                    // INSERT operation: Delete the tuple
+                    // First, get the tuple to remove from indexes
+                    Tuple current_tuple;
+                    if (table_info->table_heap_->GetTuple(rid, &current_tuple, nullptr)) {
+                        // Remove from indexes
+                        auto indexes = catalog_->GetTableIndexes(mod.table_name);
+                        for (auto *index : indexes) {
+                            int col_idx = table_info->schema_.GetColIdx(index->col_name_);
+                            if (col_idx >= 0) {
+                                Value key_val = current_tuple.GetValue(table_info->schema_, col_idx);
+                                GenericKey<8> key;
+                                key.SetFromValue(key_val);
+                                index->b_plus_tree_->Remove(key, nullptr);
+                            }
+                        }
+                    }
+                    // Delete from table
+                    table_info->table_heap_->MarkDelete(rid, nullptr);
+                } else {
+                    // UPDATE operation: Restore old tuple at old_rid
+                    // The new_rid entry (empty tuple) is handled above as an INSERT
+                    // The old tuple data is still in the slot, just marked as deleted
+                    
+                    // Unmark delete to restore the tuple
+                    table_info->table_heap_->UnmarkDelete(rid, nullptr);
+                    
+                    // The tuple data should still be there, but we need to verify
+                    // and restore index entries with old tuple values
+                    auto indexes = catalog_->GetTableIndexes(mod.table_name);
+                    for (auto *index : indexes) {
+                        int col_idx = table_info->schema_.GetColIdx(index->col_name_);
+                        if (col_idx >= 0) {
+                            // Remove any existing index entry for this RID
+                            // (might point to new_rid or have wrong value)
+                            // We'll remove all entries for this RID and re-add with old value
+                            Value old_key_val = mod.old_tuple.GetValue(table_info->schema_, col_idx);
+                            GenericKey<8> old_key;
+                            old_key.SetFromValue(old_key_val);
+                            
+                            // Try to remove any existing entry (might fail, that's OK)
+                            index->b_plus_tree_->Remove(old_key, nullptr);
+                            
+                            // Add back with old tuple value and old RID
+                            index->b_plus_tree_->Insert(old_key, rid, nullptr);
+                        }
+                    }
+                }
+            }
+            
+            current_transaction_->SetState(Transaction::TransactionState::ABORTED);
+            delete current_transaction_;
+            current_transaction_ = nullptr;
+            in_explicit_transaction_ = false;
+            std::cout << "[EXEC] Transaction rolled back." << std::endl;
+        }
+        
+        void ExecuteCommit() {
+            if (current_transaction_ == nullptr) {
+                // Allow commit even if no transaction (no-op)
+                return;
+            }
+            
+            current_transaction_->SetState(Transaction::TransactionState::COMMITTED);
+            current_transaction_->Clear();
+            delete current_transaction_;
+            current_transaction_ = nullptr;
+            in_explicit_transaction_ = false;
+            std::cout << "[EXEC] Transaction committed." << std::endl;
+        }
 
         Catalog *catalog_;
         ExecutorContext *exec_ctx_;
+        Transaction *current_transaction_;
+        int next_txn_id_;
+        bool in_explicit_transaction_; // True if user explicitly called BED2
     };
 } // namespace francodb

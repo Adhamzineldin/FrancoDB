@@ -36,6 +36,27 @@ namespace francodb {
         else if (current_token_.type == TokenType::DELETE_CMD) {
             return ParseDelete();
         }
+        // 6. BEGIN TRANSACTION
+        else if (current_token_.type == TokenType::BEGIN_TXN) {
+            Advance(); // Eat '2EBDA2'
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after 2EBDA2");
+            return std::make_unique<BeginStatement>();
+        }
+        // 7. ROLLBACK TRANSACTION
+        else if (current_token_.type == TokenType::ROLLBACK) {
+            Advance(); // Eat 'ERGA3'
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after ERGA3");
+            return std::make_unique<RollbackStatement>();
+        }
+        // 8. COMMIT TRANSACTION
+        else if (current_token_.type == TokenType::COMMIT) {
+            Advance(); // Eat '2AKED'
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after 2AKED");
+            return std::make_unique<CommitStatement>();
+        }
 
         throw Exception(ExceptionType::PARSER, "Unknown command start: " + current_token_.text);
     }
@@ -61,14 +82,42 @@ namespace francodb {
             Advance();
 
             TypeId type;
+            uint32_t length = 0;
             if (Match(TokenType::INT_TYPE)) type = TypeId::INTEGER;
-            else if (Match(TokenType::STRING_TYPE)) type = TypeId::VARCHAR;
+            else if (Match(TokenType::STRING_TYPE)) {
+                type = TypeId::VARCHAR;
+                // Optional: Check for length specification like GOMLA(100)
+                if (current_token_.type == TokenType::L_PAREN) {
+                    Advance(); // Eat (
+                    if (current_token_.type == TokenType::NUMBER) {
+                        length = std::stoi(current_token_.text);
+                        Advance();
+                    }
+                    if (!Match(TokenType::R_PAREN)) 
+                        throw Exception(ExceptionType::PARSER, "Expected ) after string length");
+                } else {
+                    length = 255; // Default VARCHAR length
+                }
+            }
             else if (Match(TokenType::BOOL_TYPE)) type = TypeId::BOOLEAN;
             else if (Match(TokenType::DATE_TYPE)) type = TypeId::TIMESTAMP;
             else if (Match(TokenType::DECIMAL_TYPE)) type = TypeId::DECIMAL;
             else throw Exception(ExceptionType::PARSER, "Unknown type for column " + col_name);
 
-            stmt->columns_.emplace_back(col_name, type);
+            // Check for PRIMARY KEY (ASASI keyword after type)
+            // Format: id RAKAM ASASI or id MIFTAH ASASI
+            bool is_primary_key = false;
+            if (current_token_.type == TokenType::PRIMARY_KEY) {
+                Advance(); // Eat ASASI (tokenized as PRIMARY_KEY)
+                is_primary_key = true;
+            }
+
+            // Create column with PRIMARY KEY flag
+            if (type == TypeId::VARCHAR) {
+                stmt->columns_.emplace_back(col_name, type, length, is_primary_key);
+            } else {
+                stmt->columns_.emplace_back(col_name, type, is_primary_key);
+            }
 
             if (current_token_.type == TokenType::COMMA) Advance();
             else if (current_token_.type != TokenType::R_PAREN)

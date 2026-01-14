@@ -13,12 +13,13 @@ namespace francodb {
 
 class IndexScanExecutor : public AbstractExecutor {
 public:
-    IndexScanExecutor(ExecutorContext *exec_ctx, SelectStatement *plan, IndexInfo *index_info, Value lookup_value)
+    IndexScanExecutor(ExecutorContext *exec_ctx, SelectStatement *plan, IndexInfo *index_info, Value lookup_value, Transaction *txn = nullptr)
         : AbstractExecutor(exec_ctx), 
           plan_(plan), 
           index_info_(index_info), 
           lookup_value_(lookup_value),
-          table_info_(nullptr) {}
+          table_info_(nullptr),
+          txn_(txn) {}
 
     void Init() override {
         // 1. Get Table Metadata (so we can fetch the actual data later)
@@ -40,7 +41,7 @@ public:
         // The tree returns a list of RIDs matching this key.
         result_rids_.clear();
         try {
-            index_info_->b_plus_tree_->GetValue(key, &result_rids_);
+            index_info_->b_plus_tree_->GetValue(key, &result_rids_, txn_);
         } catch (...) {
             // If GetValue crashes, return empty result set
             result_rids_.clear();
@@ -78,7 +79,7 @@ public:
 
             // FETCH THE ACTUAL TUPLE
             // We have the address (RID), now go get the data from the Heap.
-            bool success = table_info_->table_heap_->GetTuple(rid, tuple, nullptr);
+            bool success = table_info_->table_heap_->GetTuple(rid, tuple, txn_);
             if (success) {
                 // Found a valid (non-deleted) tuple
                 return true;
@@ -100,6 +101,7 @@ private:
     TableMetadata *table_info_;
     std::vector<RID> result_rids_; // The "Hit List" returned by the Index
     size_t cursor_ = 0;
+    Transaction *txn_;
 };
 
 } // namespace francodb

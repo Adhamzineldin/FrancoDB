@@ -24,6 +24,10 @@ namespace francodb {
         DATE_TYPE,   // TARE5
         DECIMAL_TYPE,    // KASR
         INDEX, // FEHRIS
+        PRIMARY_KEY, // RAKAM ASASI or MOFTA7 ASASI
+        BEGIN_TXN, // 2EBDA2
+        ROLLBACK, // 2ERGA3
+        COMMIT, // 2AKED
     
         DECIMAL_LITERAL,
         TRUE_LIT,    // AH

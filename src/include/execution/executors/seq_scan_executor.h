@@ -12,10 +12,11 @@ namespace francodb {
 
 class SeqScanExecutor : public AbstractExecutor {
 public:
-    SeqScanExecutor(ExecutorContext *exec_ctx, SelectStatement *plan)
+    SeqScanExecutor(ExecutorContext *exec_ctx, SelectStatement *plan, Transaction *txn = nullptr)
         : AbstractExecutor(exec_ctx), 
           plan_(plan), 
-          table_info_(nullptr) {}
+          table_info_(nullptr),
+          txn_(txn) {}
 
     void Init() override {
         // 1. Get Table Info
@@ -50,7 +51,7 @@ public:
             
             // --- FIX IS HERE ---
             // Correct args: (RID, Tuple*, Transaction*)
-            bool exists = table_page->GetTuple(current_rid_, &potential_tuple, nullptr);
+            bool exists = table_page->GetTuple(current_rid_, &potential_tuple, txn_);
             // -------------------
             
             // 4. Advance Iterator
@@ -124,6 +125,7 @@ private:
     SelectStatement *plan_;
     TableMetadata *table_info_;
     RID current_rid_;
+    Transaction *txn_;
 };
 
 } // namespace francodb

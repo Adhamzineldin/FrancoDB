@@ -163,4 +163,30 @@ namespace francodb {
 
         return true;
     }
+    
+    bool TablePage::UnmarkDelete(const RID &rid, Transaction *txn) {
+        (void) txn;
+        uint32_t slot_id = rid.GetSlotId();
+        if (slot_id >= GetTupleCount()) {
+            return false;
+        }
+
+        // 1. Calculate offset to the specific slot
+        uint32_t slot_offset = SIZE_HEADER + (slot_id * sizeof(Slot));
+
+        // 2. Read the slot
+        Slot slot;
+        memcpy(&slot, GetData() + slot_offset, sizeof(Slot));
+
+        // 3. Unmark bit (clear deleted flag)
+        if (!(slot.meta & TUPLE_DELETED)) {
+            return false; // Not deleted
+        }
+        slot.meta &= ~TUPLE_DELETED;
+
+        // 4. Write it back
+        memcpy(GetData() + slot_offset, &slot, sizeof(Slot));
+
+        return true;
+    }
 } // namespace francodb

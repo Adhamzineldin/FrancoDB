@@ -46,6 +46,9 @@ namespace francodb {
 
         // Mark a tuple as deleted (we don't physically remove immediately)
         bool MarkDelete(const RID &rid, Transaction *txn);
+        
+        // Unmark a tuple as deleted (for rollback)
+        bool UnmarkDelete(const RID &rid, Transaction *txn);
 
         // Returns remaining free space in bytes
         uint32_t GetFreeSpaceRemaining();

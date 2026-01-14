@@ -23,6 +23,9 @@ namespace francodb {
 
         // Mark a tuple as deleted
         bool MarkDelete(const RID &rid, Transaction *txn);
+        
+        // Unmark a tuple as deleted (for rollback)
+        bool UnmarkDelete(const RID &rid, Transaction *txn);
 
         // Update a tuple (Delete Old + Insert New)
         bool UpdateTuple(const Tuple &tuple, const RID &rid, Transaction *txn);

@@ -99,7 +99,8 @@ namespace francodb {
                 auto columns = t->schema_.GetColumns();
                 ss << columns.size() << " ";
                 for (auto &col : columns) {
-                    ss << col.GetName() << " " << static_cast<int>(col.GetType()) << " ";
+                    ss << col.GetName() << " " << static_cast<int>(col.GetType()) << " " 
+                       << (col.IsPrimaryKey() ? "1" : "0") << " ";
                 }
                 ss << "\n";
             }
@@ -139,8 +140,14 @@ namespace francodb {
                     for (int i = 0; i < col_count; i++) {
                         std::string col_name;
                         int type_int;
+                        int is_pk_int = 0; // Default to 0 for backward compatibility
                         in >> col_name >> type_int;
-                        cols.emplace_back(col_name, static_cast<TypeId>(type_int));
+                        // Try to read PRIMARY KEY flag (may not exist in old databases)
+                        if (in.peek() != EOF && in.peek() != '\n') {
+                            in >> is_pk_int;
+                        }
+                        bool is_pk = (is_pk_int != 0);
+                        cols.emplace_back(col_name, static_cast<TypeId>(type_int), is_pk);
                     }
                     
                     Schema schema(cols);

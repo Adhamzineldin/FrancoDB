@@ -105,6 +105,19 @@ namespace francodb {
         buffer_pool_manager_->UnpinPage(rid.GetPageId(), true);
         return result;
     }
+    
+    bool TableHeap::UnmarkDelete(const RID &rid, Transaction *txn) {
+        Page *page = buffer_pool_manager_->FetchPage(rid.GetPageId());
+        if (page == nullptr) return false;
+        
+        page->WLock();
+        auto *table_page = reinterpret_cast<TablePage *>(page->GetData());
+        bool result = table_page->UnmarkDelete(rid, txn);
+        page->WUnlock();
+        
+        buffer_pool_manager_->UnpinPage(rid.GetPageId(), true);
+        return result;
+    }
 
     bool TableHeap::UpdateTuple(const Tuple &tuple, const RID &rid, Transaction *txn) {
         Page *page = buffer_pool_manager_->FetchPage(rid.GetPageId());

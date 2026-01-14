@@ -18,3 +18,26 @@ exit
 
 -- 6. Query with Index (Optimizer should trigger)
 2E5TAR * MEN students LAMA gpa = 4.0;
+
+
+
+
+
+
+
+
+
+-- Create table with PRIMARY KEY
+2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, email GOMLA);
+
+-- Begin transaction
+2EBDA2;
+
+-- Insert (will be tracked for rollback)
+EMLA GOWA users ELKEYAM (1, 'Ahmed', 'ahmed@example.com');
+
+-- Rollback (undoes the insert)
+2ERGA3;
+
+-- Or commit
+KAMEL;

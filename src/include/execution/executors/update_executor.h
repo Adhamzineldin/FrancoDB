@@ -11,8 +11,8 @@ namespace francodb {
 
 class UpdateExecutor : public AbstractExecutor {
 public:
-    UpdateExecutor(ExecutorContext *exec_ctx, UpdateStatement *plan)
-        : AbstractExecutor(exec_ctx), plan_(plan), table_info_(nullptr) {}
+    UpdateExecutor(ExecutorContext *exec_ctx, UpdateStatement *plan, Transaction *txn = nullptr)
+        : AbstractExecutor(exec_ctx), plan_(plan), table_info_(nullptr), txn_(txn) {}
 
     void Init() override {
         table_info_ = exec_ctx_->GetCatalog()->GetTable(plan_->table_name_);
@@ -45,7 +45,7 @@ public:
                 RID rid(curr_page_id, i);
                 Tuple old_tuple;
                 
-                if (table_page->GetTuple(rid, &old_tuple, nullptr)) {
+                if (table_page->GetTuple(rid, &old_tuple, txn_)) {
                     if (EvaluatePredicate(old_tuple)) {
                         // FOUND MATCH! Prepare the NEW tuple.
                         Tuple new_tuple = CreateUpdatedTuple(old_tuple);
@@ -64,7 +64,7 @@ public:
         for (const auto &update : updates_to_apply) {
             // Verify the tuple still exists (might have been deleted by another thread)
             Tuple verify_tuple;
-            if (!table_info_->table_heap_->GetTuple(update.old_rid, &verify_tuple, nullptr)) {
+            if (!table_info_->table_heap_->GetTuple(update.old_rid, &verify_tuple, txn_)) {
                 // Tuple was already deleted by another thread, skip this update
                 continue;
             }
@@ -75,6 +75,43 @@ public:
                 continue;
             }
             
+            // Track modification for rollback (old RID with old tuple)
+            if (txn_) {
+                txn_->AddModifiedTuple(update.old_rid, verify_tuple, false, plan_->table_name_); // false = not deleted, just updated
+            }
+            
+            // --- CHECK PRIMARY KEY UNIQUENESS (if updating a PK column) ---
+            for (uint32_t i = 0; i < table_info_->schema_.GetColumnCount(); i++) {
+                const Column &col = table_info_->schema_.GetColumn(i);
+                if (col.IsPrimaryKey() && col.GetName() == plan_->target_column_) {
+                    Value new_pk_value = update.new_tuple.GetValue(table_info_->schema_, i);
+                    
+                    // Check if new primary key value already exists (excluding current tuple)
+                    auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
+                    for (auto *index : indexes) {
+                        if (index->col_name_ == col.GetName()) {
+                            GenericKey<8> key;
+                            key.SetFromValue(new_pk_value);
+                            
+                            std::vector<RID> result_rids;
+                            if (index->b_plus_tree_->GetValue(key, &result_rids, txn_)) {
+                                // Check if any of the RIDs point to non-deleted tuples (excluding current)
+                                for (const RID &rid : result_rids) {
+                                    if (rid == update.old_rid) continue; // Skip current tuple
+                                    Tuple existing_tuple;
+                                    if (table_info_->table_heap_->GetTuple(rid, &existing_tuple, txn_)) {
+                                        throw Exception(ExceptionType::EXECUTION, 
+                                            "PRIMARY KEY violation: Duplicate value for " + col.GetName());
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            // -----------------------------------------------------------------
+            
             // A. Remove old tuple from indexes
             auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
             for (auto *index : indexes) {
@@ -84,11 +121,11 @@ public:
                 GenericKey<8> old_key;
                 old_key.SetFromValue(old_key_val);
                 
-                index->b_plus_tree_->Remove(old_key, nullptr);
+                index->b_plus_tree_->Remove(old_key, txn_);
             }
             
             // B. Delete Old tuple from table (only if not already deleted)
-            bool deleted = table_info_->table_heap_->MarkDelete(update.old_rid, nullptr);
+            bool deleted = table_info_->table_heap_->MarkDelete(update.old_rid, txn_);
             if (!deleted) {
                 // Tuple was already deleted, skip to next
                 continue;
@@ -96,10 +133,16 @@ public:
             
             // C. Insert New tuple into table
             RID new_rid;
-            bool inserted = table_info_->table_heap_->InsertTuple(update.new_tuple, &new_rid, nullptr);
+            bool inserted = table_info_->table_heap_->InsertTuple(update.new_tuple, &new_rid, txn_);
             if (!inserted) {
                 // Failed to insert, skip index update
                 continue;
+            }
+            
+            // Track new tuple for rollback (new RID - this is an INSERT that needs to be deleted on rollback)
+            if (txn_) {
+                Tuple empty_tuple;
+                txn_->AddModifiedTuple(new_rid, empty_tuple, false, plan_->table_name_);
             }
             
             // D. Add new tuple to indexes
@@ -110,7 +153,7 @@ public:
                 GenericKey<8> new_key;
                 new_key.SetFromValue(new_key_val);
                 
-                index->b_plus_tree_->Insert(new_key, new_rid, nullptr);
+                index->b_plus_tree_->Insert(new_key, new_rid, txn_);
             }
             
             count++;
@@ -168,6 +211,7 @@ private:
     UpdateStatement *plan_;
     TableMetadata *table_info_;
     bool is_finished_ = false;
+    Transaction *txn_;
 };
 
 } // namespace francodb

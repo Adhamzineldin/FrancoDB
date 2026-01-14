@@ -11,8 +11,8 @@ namespace francodb {
 
 class DeleteExecutor : public AbstractExecutor {
 public:
-    DeleteExecutor(ExecutorContext *exec_ctx, DeleteStatement *plan)
-        : AbstractExecutor(exec_ctx), plan_(plan), table_info_(nullptr) {}
+    DeleteExecutor(ExecutorContext *exec_ctx, DeleteStatement *plan, Transaction *txn = nullptr)
+        : AbstractExecutor(exec_ctx), plan_(plan), table_info_(nullptr), txn_(txn) {}
 
     void Init() override {
         table_info_ = exec_ctx_->GetCatalog()->GetTable(plan_->table_name_);
@@ -65,7 +65,7 @@ public:
             
             // Verify the tuple still exists (might have been deleted by another thread)
             Tuple verify_tuple;
-            if (!table_info_->table_heap_->GetTuple(rid, &verify_tuple, nullptr)) {
+            if (!table_info_->table_heap_->GetTuple(rid, &verify_tuple, txn_)) {
                 // Tuple was already deleted, skip
                 continue;
             }
@@ -74,6 +74,11 @@ public:
             if (!EvaluatePredicate(verify_tuple)) {
                 // Tuple no longer matches predicate, skip
                 continue;
+            }
+            
+            // Track modification for rollback
+            if (txn_) {
+                txn_->AddModifiedTuple(rid, verify_tuple, true, plan_->table_name_); // true = is_deleted
             }
             
             // A. Remove from indexes BEFORE deleting from table
@@ -85,11 +90,11 @@ public:
                 GenericKey<8> key;
                 key.SetFromValue(key_val);
                 
-                index->b_plus_tree_->Remove(key, nullptr);
+                index->b_plus_tree_->Remove(key, txn_);
             }
             
             // B. Delete from table (only if not already deleted)
-            bool deleted = table_info_->table_heap_->MarkDelete(rid, nullptr);
+            bool deleted = table_info_->table_heap_->MarkDelete(rid, txn_);
             if (deleted) {
                 count++;
             }
@@ -134,6 +139,7 @@ private:
     DeleteStatement *plan_;
     TableMetadata *table_info_;
     bool is_finished_ = false;
+    Transaction *txn_;
 };
 
 } // namespace francodb
