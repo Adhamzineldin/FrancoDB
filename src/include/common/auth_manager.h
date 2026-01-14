@@ -59,6 +59,9 @@ namespace francodb {
         
         // Check if user is SUPERADMIN
         bool IsSuperAdmin(const std::string& username);
+        
+        // Save users to system database (public for crash handling)
+        void SaveUsers();
 
     private:
         // Simple hash function (for demo - use proper crypto in production)
@@ -66,9 +69,6 @@ namespace francodb {
         
         // Load users from system database into memory cache
         void LoadUsers();
-        
-        // Save users to system database
-        void SaveUsers();
 
         BufferPoolManager* system_bpm_;
         Catalog* system_catalog_;

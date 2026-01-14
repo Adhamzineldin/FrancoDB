@@ -61,6 +61,9 @@ public:
         return (it == external_catalog_.end()) ? nullptr : it->second;
     }
 
+    // Flush all databases (save all catalogs and unpin all pages)
+    void FlushAllDatabases();
+
 private:
     std::map<std::string, std::shared_ptr<DbEntry>> registry_;
     std::map<std::string, BufferPoolManager*> external_bpm_;

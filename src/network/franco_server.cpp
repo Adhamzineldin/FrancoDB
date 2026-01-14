@@ -30,6 +30,8 @@ typedef int socket_t;
 #include <algorithm>
 #include <string>
 #include <filesystem>
+#include <chrono>
+#include <thread>
 
 namespace francodb {
     FrancoServer::FrancoServer(BufferPoolManager* bpm, Catalog* catalog)
@@ -40,9 +42,13 @@ namespace francodb {
 #endif
 
         // Create system database for authentication (system.francodb)
-        system_disk_ = std::make_unique<DiskManager>("system");
+        // Use fixed path in data/ directory for persistence
+        std::filesystem::create_directories("data");
+        system_disk_ = std::make_unique<DiskManager>("data/system");
         system_bpm_ = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, system_disk_.get());
         system_catalog_ = std::make_unique<Catalog>(system_bpm_.get());
+        // Load existing catalog if it exists
+        system_catalog_->LoadCatalog();
         auth_manager_ = std::make_unique<AuthManager>(system_bpm_.get(), system_catalog_.get());
 
         // Register default database (points to provided bpm/catalog; not owned)
@@ -51,6 +57,12 @@ namespace francodb {
     }
 
     FrancoServer::~FrancoServer() {
+        // Stop auto-save thread
+        running_ = false;
+        if (auto_save_thread_.joinable()) {
+            auto_save_thread_.join();
+        }
+        
         Shutdown();
 #ifdef _WIN32
         WSACleanup();
@@ -85,23 +97,52 @@ namespace francodb {
         listen(s, net::BACKLOG_QUEUE);
         listen_sock_ = (uintptr_t)s;
         running_ = true;
+        
+        // Start auto-save thread (saves data every 30 seconds)
+        auto_save_thread_ = std::thread(&FrancoServer::AutoSaveLoop, this);
 
         std::cout << "[READY] FrancoDB Server listening on port " << port << "..." << std::endl;
+        std::cout << "[INFO] Auto-save enabled (every 30 seconds)." << std::endl;
 
         while (running_) {
             sockaddr_in client_addr{};
 #ifdef _WIN32
             int len = sizeof(client_addr);
+            // Use select with timeout to make accept() interruptible
+            fd_set readSet;
+            FD_ZERO(&readSet);
+            FD_SET(s, &readSet);
+            timeval timeout;
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
+            int selectResult = select(0, &readSet, nullptr, nullptr, &timeout);
+            if (selectResult > 0 && FD_ISSET(s, &readSet)) {
+                socket_t client_sock = accept(s, (struct sockaddr*)&client_addr, &len);
+                if (client_sock != INVALID_SOCK) {
+                    uintptr_t client_id = (uintptr_t)client_sock;
+                    client_threads_[client_id] = std::thread(&FrancoServer::HandleClient, this, client_id);
+                    client_threads_[client_id].detach();
+                }
+            }
 #else
             socklen_t len = sizeof(client_addr);
-#endif
-            socket_t client_sock = accept((socket_t)listen_sock_, (struct sockaddr*)&client_addr, &len);
-
-            if (client_sock != INVALID_SOCK) {
-                uintptr_t client_id = (uintptr_t)client_sock;
-                client_threads_[client_id] = std::thread(&FrancoServer::HandleClient, this, client_id);
-                client_threads_[client_id].detach();
+            // Use select with timeout to make accept() interruptible
+            fd_set readSet;
+            FD_ZERO(&readSet);
+            FD_SET(s, &readSet);
+            timeval timeout;
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
+            int selectResult = select(s + 1, &readSet, nullptr, nullptr, &timeout);
+            if (selectResult > 0 && FD_ISSET(s, &readSet)) {
+                socket_t client_sock = accept(s, (struct sockaddr*)&client_addr, &len);
+                if (client_sock != INVALID_SOCK) {
+                    uintptr_t client_id = (uintptr_t)client_sock;
+                    client_threads_[client_id] = std::thread(&FrancoServer::HandleClient, this, client_id);
+                    client_threads_[client_id].detach();
+                }
             }
+#endif
         }
 
 #ifdef _WIN32
@@ -112,6 +153,39 @@ namespace francodb {
     }
 
     void FrancoServer::Shutdown() {
+        std::cout << "[SHUTDOWN] Saving all data to disk..." << std::endl;
+        std::cout.flush();
+        
+        // Save all users
+        if (auth_manager_) {
+            auth_manager_->SaveUsers();
+        }
+        
+        // Save system catalog
+        if (system_catalog_) {
+            system_catalog_->SaveCatalog();
+        }
+        
+        // Flush system buffer pool
+        if (system_bpm_) {
+            system_bpm_->FlushAllPages();
+        }
+        
+        // Flush all databases in registry
+        if (registry_) {
+            registry_->FlushAllDatabases();
+        }
+        
+        // Flush default database
+        if (catalog_) {
+            catalog_->SaveCatalog();
+        }
+        if (bpm_) {
+            bpm_->FlushAllPages();
+        }
+        
+        std::cout << "[SHUTDOWN] All data saved successfully." << std::endl;
+        std::cout.flush();
         running_ = false;
         if (listen_sock_ != 0) {
 #ifdef _WIN32
@@ -128,6 +202,58 @@ namespace francodb {
             }
         }
         client_threads_.clear();
+    }
+
+    void FrancoServer::AutoSaveLoop() {
+        const int AUTO_SAVE_INTERVAL_SECONDS = 30; // Save every 30 seconds
+        
+        while (running_) {
+            // Sleep for the interval, but check running_ flag periodically
+            for (int i = 0; i < AUTO_SAVE_INTERVAL_SECONDS * 10 && running_; ++i) {
+#ifdef _WIN32
+                Sleep(100); // Sleep 100ms at a time
+#else
+                usleep(100000); // Sleep 100ms at a time
+#endif
+            }
+            
+            // Only save if server is still running
+            if (running_) {
+                try {
+                    // Save all users
+                    if (auth_manager_) {
+                        auth_manager_->SaveUsers();
+                    }
+                    
+                    // Save system catalog
+                    if (system_catalog_) {
+                        system_catalog_->SaveCatalog();
+                    }
+                    
+                    // Flush system buffer pool
+                    if (system_bpm_) {
+                        system_bpm_->FlushAllPages();
+                    }
+                    
+                    // Flush all databases in registry
+                    if (registry_) {
+                        registry_->FlushAllDatabases();
+                    }
+                    
+                    // Flush default database
+                    if (catalog_) {
+                        catalog_->SaveCatalog();
+                    }
+                    if (bpm_) {
+                        bpm_->FlushAllPages();
+                    }
+                    
+                    std::cout << "[AUTO-SAVE] Data saved automatically." << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "[AUTO-SAVE] Error: " << e.what() << std::endl;
+                }
+            }
+        }
     }
 
     ProtocolType FrancoServer::DetectProtocol(const std::string& initial_data) {
