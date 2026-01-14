@@ -55,7 +55,7 @@ namespace francodb {
             return;
         }
 
-        // Create franco_users table
+        // Create franco_users table (this will create system database files if they don't exist)
         std::vector<Column> user_cols;
         user_cols.emplace_back("username", TypeId::VARCHAR, static_cast<uint32_t>(64), true);  // Primary key
         user_cols.emplace_back("password_hash", TypeId::VARCHAR, static_cast<uint32_t>(128), false);
@@ -68,6 +68,7 @@ namespace francodb {
         }
 
         // Insert default admin user (from config) as SUPERADMIN
+        // This ensures default user exists even if config file exists but system files don't
         auto& config = ConfigManager::GetInstance();
         std::string root_user = config.GetRootUsername();
         std::string root_pass = config.GetRootPassword();
@@ -80,6 +81,11 @@ namespace francodb {
         if (stmt) {
             system_engine_->Execute(stmt.get());
         }
+
+        // CRITICAL: Save catalog to ensure system files are written to disk
+        // This is important when config exists but system files don't
+        system_catalog_->SaveCatalog();
+        system_bpm_->FlushAllPages();
 
         initialized_ = true;
     }

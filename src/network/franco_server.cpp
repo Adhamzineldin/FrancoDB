@@ -47,8 +47,9 @@ namespace francodb {
         std::string data_dir = config.GetDataDirectory();
         std::filesystem::create_directories(data_dir);
         
-        std::string system_db_path = data_dir + "/system";
-        system_disk_ = std::make_unique<DiskManager>(system_db_path);
+        // Use filesystem::path for cross-platform path handling (Windows uses \, Linux uses /)
+        std::filesystem::path system_db_path = std::filesystem::path(data_dir) / "system";
+        system_disk_ = std::make_unique<DiskManager>(system_db_path.string());
         
         // Apply encryption to system database if enabled
         if (config.IsEncryptionEnabled() && !config.GetEncryptionKey().empty()) {
@@ -57,9 +58,16 @@ namespace francodb {
         
         system_bpm_ = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, system_disk_.get());
         system_catalog_ = std::make_unique<Catalog>(system_bpm_.get());
-        // Load existing catalog if it exists
+        // Load existing catalog if it exists, otherwise it will be created
         system_catalog_->LoadCatalog();
+        
+        // Initialize AuthManager (this will create system tables and default user if needed)
         auth_manager_ = std::make_unique<AuthManager>(system_bpm_.get(), system_catalog_.get());
+        
+        // CRITICAL: Save system catalog after initialization to ensure system files are created
+        // This ensures that even if config exists but system files don't, they get created
+        system_catalog_->SaveCatalog();
+        system_bpm_->FlushAllPages();
 
         // Register default database (points to provided bpm/catalog; not owned)
         registry_ = std::make_unique<DatabaseRegistry>();

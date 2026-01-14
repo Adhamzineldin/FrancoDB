@@ -40,7 +40,7 @@ public:
         return nullptr;
     }
 
-    std::shared_ptr<DbEntry> GetOrCreate(const std::string &name, size_t pool_size = BUFFER_POOL_SIZE) {
+        std::shared_ptr<DbEntry> GetOrCreate(const std::string &name, size_t pool_size = BUFFER_POOL_SIZE) {
         if (registry_.count(name)) return registry_[name];
 
         // Use configured data directory
@@ -49,8 +49,9 @@ public:
         std::filesystem::create_directories(data_dir);
         
         auto entry = std::make_shared<DbEntry>();
-        std::string db_path = data_dir + "/" + name;
-        entry->dm = std::make_unique<DiskManager>(db_path);
+        // Use filesystem::path for cross-platform path handling (Windows uses \, Linux uses /)
+        std::filesystem::path db_path = std::filesystem::path(data_dir) / name;
+        entry->dm = std::make_unique<DiskManager>(db_path.string());
         
         // Apply encryption if enabled
         if (config.IsEncryptionEnabled() && !config.GetEncryptionKey().empty()) {
