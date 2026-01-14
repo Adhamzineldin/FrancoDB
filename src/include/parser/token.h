@@ -13,6 +13,16 @@ namespace francodb {
         UPDATE_SET,  // 5ALY
         UPDATE_CMD,      // 3ADEL
         TABLE,       // GADWAL
+        DATABASE,    // DATABASE
+        USE,         // 2ESTA5DEM / USE
+        LOGIN,       // LOGIN
+        USER,        // USER
+        ROLE,        // ROLE
+        SHOW,        // SHOW / WARENY
+        WHOAMI,      // WHOAMI
+        STATUS,      // STATUS
+        DATABASES,   // DATABASES
+        PASS,        // PASS (for CREATE USER)
         INSERT,      // EMLA
         INTO,        // GOWA
         VALUES,      // ELKEYAM

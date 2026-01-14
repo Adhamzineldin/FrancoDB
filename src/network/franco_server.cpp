@@ -18,11 +18,18 @@ typedef int socket_t;
 #include "network/protocol.h"
 #include "parser/lexer.h"
 #include "parser/parser.h"
+#include "storage/disk/disk_manager.h"
+#include "buffer/buffer_pool_manager.h"
+#include "catalog/catalog.h"
+#include "common/config.h"
+#include "common/franco_net_config.h"
+#include "network/database_registry.h"
 
 #include <iostream>
 #include <cstring>
 #include <algorithm>
 #include <string>
+#include <filesystem>
 
 namespace francodb {
     FrancoServer::FrancoServer(BufferPoolManager* bpm, Catalog* catalog)
@@ -31,6 +38,16 @@ namespace francodb {
         WSADATA wsa;
         WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
+
+        // Create system database for authentication (system.francodb)
+        system_disk_ = std::make_unique<DiskManager>("system");
+        system_bpm_ = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, system_disk_.get());
+        system_catalog_ = std::make_unique<Catalog>(system_bpm_.get());
+        auth_manager_ = std::make_unique<AuthManager>(system_bpm_.get(), system_catalog_.get());
+
+        // Register default database (points to provided bpm/catalog; not owned)
+        registry_ = std::make_unique<DatabaseRegistry>();
+        registry_->RegisterExternal("default", bpm_, catalog_);
     }
 
     FrancoServer::~FrancoServer() {
@@ -125,6 +142,21 @@ namespace francodb {
         return ProtocolType::TEXT;
     }
 
+    std::pair<Catalog*, BufferPoolManager*> FrancoServer::GetOrCreateDb(const std::string &db_name) {
+        auto entry = registry_->Get(db_name);
+        if (!entry) {
+            entry = registry_->GetOrCreate(db_name);
+        }
+        if (!entry) return {nullptr, nullptr};
+        if (entry->catalog && entry->bpm) {
+            return {entry->catalog.get(), entry->bpm.get()};
+        }
+        // external?
+        auto ext_bpm = registry_->ExternalBpm(db_name);
+        auto ext_cat = registry_->ExternalCatalog(db_name);
+        return {ext_cat, ext_bpm};
+    }
+
     void FrancoServer::HandleClient(uintptr_t client_socket) {
         socket_t sock = (socket_t)client_socket;
         char buffer[net::MAX_PACKET_SIZE];
@@ -143,7 +175,7 @@ namespace francodb {
             }
         }
         
-        // Create appropriate handler
+        // Create appropriate handler and initial engine (default db)
         auto handler = CreateHandler(protocol_type, client_socket);
         
         while (running_) {
@@ -165,6 +197,42 @@ namespace francodb {
             }
 
             std::string response = handler->ProcessRequest(request);
+
+            // After processing, see if session requested a different DB
+            if (handler->GetSession()->is_authenticated) {
+                const std::string &db = handler->GetSession()->current_db;
+
+                // If session is still on the default database, keep using the original bpm_/catalog_
+                // and skip any registry-based switch. The default DB is already bound to the handler.
+                if (!db.empty() && db != "default") {
+                    auto entry = registry_->GetOrCreate(db);
+                    if (entry && entry->catalog && entry->bpm) {
+                        // Rebuild handler with an engine bound to that db
+                        auto current_session = handler->GetSession();
+                        handler.reset();
+                        auto engine = std::make_unique<ExecutionEngine>(entry->bpm.get(), entry->catalog.get());
+                        switch (protocol_type) {
+                            case ProtocolType::JSON:
+                                handler = std::make_unique<ApiConnectionHandler>(engine.release(), auth_manager_.get());
+                                break;
+                            case ProtocolType::BINARY:
+                                handler = std::make_unique<BinaryConnectionHandler>(engine.release(), auth_manager_.get());
+                                break;
+                            case ProtocolType::TEXT:
+                            default:
+                                handler = std::make_unique<ClientConnectionHandler>(engine.release(), auth_manager_.get());
+                                break;
+                        }
+                        // Restore session info
+                        handler->GetSession()->is_authenticated = current_session->is_authenticated;
+                        handler->GetSession()->current_user = current_session->current_user;
+                        handler->GetSession()->current_db = db;
+                    } else {
+                        response = "ERROR: Failed to switch database\n";
+                    }
+                }
+            }
+
             send(sock, response.c_str(), response.size(), 0);
         }
         
@@ -183,12 +251,12 @@ namespace francodb {
         
         switch (type) {
             case ProtocolType::JSON:
-                return std::make_unique<ApiConnectionHandler>(engine.release());
+                return std::make_unique<ApiConnectionHandler>(engine.release(), auth_manager_.get());
             case ProtocolType::BINARY:
-                return std::make_unique<BinaryConnectionHandler>(engine.release());
+                return std::make_unique<BinaryConnectionHandler>(engine.release(), auth_manager_.get());
             case ProtocolType::TEXT:
             default:
-                return std::make_unique<ClientConnectionHandler>(engine.release());
+                return std::make_unique<ClientConnectionHandler>(engine.release(), auth_manager_.get());
         }
     }
 }

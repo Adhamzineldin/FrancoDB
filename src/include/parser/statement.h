@@ -7,7 +7,7 @@
 #include "common/value.h"
 
 namespace francodb {
-    enum class StatementType { CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, BEGIN, ROLLBACK, COMMIT };
+    enum class StatementType { CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, BEGIN, ROLLBACK, COMMIT, CREATE_DB, USE_DB, LOGIN, CREATE_USER, ALTER_USER_ROLE, SHOW_USERS, SHOW_DATABASES, SHOW_STATUS, WHOAMI };
 
     enum class LogicType { NONE, AND, OR };
 
@@ -107,5 +107,61 @@ namespace francodb {
     class CommitStatement : public Statement {
     public:
         StatementType GetType() const override { return StatementType::COMMIT; }
+    };
+
+    // --- DATABASE & AUTH ---
+
+    class CreateDatabaseStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::CREATE_DB; }
+        std::string db_name_;
+    };
+
+    class UseDatabaseStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::USE_DB; }
+        std::string db_name_;
+    };
+
+    class LoginStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::LOGIN; }
+        std::string username_;
+        std::string password_;
+    };
+
+    class CreateUserStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::CREATE_USER; }
+        std::string username_;
+        std::string password_;
+        std::string role_; // ADMIN/USER/READONLY
+    };
+
+    class AlterUserRoleStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::ALTER_USER_ROLE; }
+        std::string username_;
+        std::string role_;
+    };
+
+    class ShowUsersStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_USERS; }
+    };
+
+    class ShowDatabasesStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_DATABASES; }
+    };
+
+    class WhoAmIStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::WHOAMI; }
+    };
+
+    class ShowStatusStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_STATUS; }
     };
 } // namespace francodb

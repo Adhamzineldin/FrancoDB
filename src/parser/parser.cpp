@@ -27,8 +27,14 @@ std::unique_ptr<Statement> Parser::ParseQuery() {
         } else if (current_token_.type == TokenType::INDEX) {
             Advance(); // Eat 'FEHRIS'
             return ParseCreateIndex();
+        } else if (current_token_.type == TokenType::DATABASE) {
+            Advance(); // Eat 'DATABASE'
+            return ParseCreateDatabase();
+        } else if (current_token_.type == TokenType::USER) {
+            Advance(); // Eat 'USER'
+            return ParseCreateUser();
         }
-        throw Exception(ExceptionType::PARSER, "Expected GADWAL or FEHRIS after 2E3MEL");
+        throw Exception(ExceptionType::PARSER, "Expected GADWAL, FEHRIS, DATABASE, or USER after 2E3MEL");
     } 
     
     // 2. INSERT
@@ -39,8 +45,16 @@ std::unique_ptr<Statement> Parser::ParseQuery() {
     else if (current_token_.type == TokenType::SELECT) {
         return ParseSelect();
     } 
-    // 4. UPDATE
+    // 4. UPDATE / ALTER USER
     else if (current_token_.type == TokenType::UPDATE_CMD) {
+        Advance(); // Eat '3ADEL'
+        // Check if it's ALTER USER ROLE
+        if (current_token_.type == TokenType::USER) {
+            Advance(); // Eat USER
+            return ParseAlterUserRole();
+        }
+        // Otherwise it's UPDATE table (need to restore token for ParseUpdate)
+        // ParseUpdate expects to start with table name, so we're good
         return ParseUpdate();
     } 
     // 5. DELETE
@@ -67,6 +81,38 @@ std::unique_ptr<Statement> Parser::ParseQuery() {
         if (!Match(TokenType::SEMICOLON))
             throw Exception(ExceptionType::PARSER, "Expected ; after 2AKED");
         return std::make_unique<CommitStatement>();
+    }
+    // 9. USE database
+    else if (current_token_.type == TokenType::USE) {
+        return ParseUseDatabase();
+    }
+    // 10. LOGIN user pass
+    else if (current_token_.type == TokenType::LOGIN) {
+        return ParseLogin();
+    }
+    // 11. WHOAMI
+    else if (current_token_.type == TokenType::WHOAMI) {
+        return ParseWhoAmI();
+    }
+    // 12. STATUS
+    else if (current_token_.type == TokenType::STATUS) {
+        return ParseShowStatus();
+    }
+    // 13. SHOW USERS / SHOW DATABASES
+    else if (current_token_.type == TokenType::SHOW) {
+        Advance(); // Eat SHOW / WARENY
+        if (current_token_.type == TokenType::USER) {
+            Advance(); // Eat USER
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after SHOW USER");
+            return std::make_unique<ShowUsersStatement>();
+        } else if (current_token_.type == TokenType::DATABASES) {
+            Advance(); // Eat DATABASES
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after SHOW DATABASES");
+            return std::make_unique<ShowDatabasesStatement>();
+        }
+        throw Exception(ExceptionType::PARSER, "Expected USER or DATABASES after SHOW");
     }
 
     throw Exception(ExceptionType::PARSER, "Unknown command start: " + current_token_.text);
@@ -171,6 +217,130 @@ std::unique_ptr<CreateIndexStatement> Parser::ParseCreateIndex() {
     if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
 
     return stmt;
+}
+
+std::unique_ptr<CreateDatabaseStatement> Parser::ParseCreateDatabase() {
+    auto stmt = std::make_unique<CreateDatabaseStatement>();
+    if (current_token_.type != TokenType::IDENTIFIER)
+        throw Exception(ExceptionType::PARSER, "Expected database name after DATABASE");
+    stmt->db_name_ = current_token_.text;
+    Advance();
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; at end of CREATE DATABASE");
+    return stmt;
+}
+
+std::unique_ptr<UseDatabaseStatement> Parser::ParseUseDatabase() {
+    Advance(); // Eat USE
+    auto stmt = std::make_unique<UseDatabaseStatement>();
+    if (current_token_.type != TokenType::IDENTIFIER)
+        throw Exception(ExceptionType::PARSER, "Expected database name after USE");
+    stmt->db_name_ = current_token_.text;
+    Advance();
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; at end of USE");
+    return stmt;
+}
+
+std::unique_ptr<LoginStatement> Parser::ParseLogin() {
+    Advance(); // Eat LOGIN
+    auto stmt = std::make_unique<LoginStatement>();
+
+    // Username
+    if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
+        throw Exception(ExceptionType::PARSER, "Expected username after LOGIN");
+    stmt->username_ = current_token_.text;
+    Advance();
+
+    // Password
+    if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
+        throw Exception(ExceptionType::PARSER, "Expected password after username");
+    stmt->password_ = current_token_.text;
+    Advance();
+
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; at end of LOGIN");
+    return stmt;
+}
+
+std::unique_ptr<WhoAmIStatement> Parser::ParseWhoAmI() {
+    Advance(); // Eat WHOAMI
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; after WHOAMI");
+    return std::make_unique<WhoAmIStatement>();
+}
+
+std::unique_ptr<ShowStatusStatement> Parser::ParseShowStatus() {
+    Advance(); // Eat STATUS
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; after STATUS");
+    return std::make_unique<ShowStatusStatement>();
+}
+
+std::unique_ptr<CreateUserStatement> Parser::ParseCreateUser() {
+    auto stmt = std::make_unique<CreateUserStatement>();
+    
+    // Username
+    if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
+        throw Exception(ExceptionType::PARSER, "Expected username after USER");
+    stmt->username_ = current_token_.text;
+    Advance();
+    
+    // PASS keyword
+    if (!Match(TokenType::PASS))
+        throw Exception(ExceptionType::PARSER, "Expected PASS after username");
+    
+    // Password
+    if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
+        throw Exception(ExceptionType::PARSER, "Expected password after PASS");
+    stmt->password_ = current_token_.text;
+    Advance();
+    
+    // ROLE keyword
+    if (!Match(TokenType::ROLE))
+        throw Exception(ExceptionType::PARSER, "Expected ROLE after password");
+    
+    // Role (ADMIN/USER/READONLY)
+    if (current_token_.type != TokenType::IDENTIFIER)
+        throw Exception(ExceptionType::PARSER, "Expected role (ADMIN/USER/READONLY) after ROLE");
+    stmt->role_ = current_token_.text;
+    Advance();
+    
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; at end of CREATE USER");
+    return stmt;
+}
+
+std::unique_ptr<AlterUserRoleStatement> Parser::ParseAlterUserRole() {
+    auto stmt = std::make_unique<AlterUserRoleStatement>();
+    
+    // USER keyword already consumed by caller
+    // Username
+    if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
+        throw Exception(ExceptionType::PARSER, "Expected username after USER");
+    stmt->username_ = current_token_.text;
+    Advance();
+    
+    // ROLE keyword
+    if (!Match(TokenType::ROLE))
+        throw Exception(ExceptionType::PARSER, "Expected ROLE after username");
+    
+    // New role
+    if (current_token_.type != TokenType::IDENTIFIER)
+        throw Exception(ExceptionType::PARSER, "Expected role (ADMIN/USER/READONLY) after ROLE");
+    stmt->role_ = current_token_.text;
+    Advance();
+    
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; at end of ALTER USER ROLE");
+    return stmt;
+}
+
+std::unique_ptr<ShowDatabasesStatement> Parser::ParseShowDatabases() {
+    // DATABASES already consumed by caller
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; after SHOW DATABASES");
+    return std::make_unique<ShowDatabasesStatement>();
 }
 
 // EMLA GOWA users ELKEYAM (1, 'Ahmed', AH, 10.5);

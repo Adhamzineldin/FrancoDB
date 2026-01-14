@@ -30,6 +30,15 @@ namespace francodb {
         std::vector<WhereCondition> ParseWhereClause();
 
         std::unique_ptr<CreateIndexStatement> ParseCreateIndex();
+        std::unique_ptr<CreateDatabaseStatement> ParseCreateDatabase();
+        std::unique_ptr<UseDatabaseStatement> ParseUseDatabase();
+        std::unique_ptr<LoginStatement> ParseLogin();
+        std::unique_ptr<CreateUserStatement> ParseCreateUser();
+        std::unique_ptr<AlterUserRoleStatement> ParseAlterUserRole();
+        std::unique_ptr<ShowUsersStatement> ParseShowUsers();
+        std::unique_ptr<ShowDatabasesStatement> ParseShowDatabases();
+        std::unique_ptr<WhoAmIStatement> ParseWhoAmI();
+        std::unique_ptr<ShowStatusStatement> ParseShowStatus();
 
         Lexer lexer_;
         Token current_token_;
