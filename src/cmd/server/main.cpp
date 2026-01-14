@@ -43,16 +43,11 @@ std::string GetExecutableDir() {
 #endif
 }
 
-// Helper: Ensure database file exists before DiskManager tries to open it
-void CreateFileIfMissing(const std::string& path) {
-    if (!fs::exists(path)) {
-        std::cout << "[INFO] Database file missing. Creating: " << path << std::endl;
-        std::ofstream file(path, std::ios::binary | std::ios::out);
-        if (!file.is_open()) {
-            throw std::runtime_error("Failed to create database file. Check permissions for: " + path);
-        }
-        file.close();
-    }
+// Helper: Check if file is corrupt (Empty/0-byte)
+// This fixes the crash where an empty file confuses the DiskManager
+bool IsFileCorrupt(const std::string& path) {
+    if (!fs::exists(path)) return false; 
+    return fs::file_size(path) == 0;     
 }
 
 // Save all data function (called by both signal handler and shutdown)
@@ -132,7 +127,6 @@ int main() {
 
     try {
         // 1. Locate Config relative to Executable
-        // This fixes the "Service can't find config" error
         std::string exe_dir = GetExecutableDir();
         fs::path config_path = fs::path(exe_dir) / "francodb.conf";
         
@@ -143,7 +137,6 @@ int main() {
             config.LoadConfig(config_path.string());
         } else {
             std::cout << "[WARN] Config not found at " << config_path << ". Using defaults/interactive." << std::endl;
-            // Only run interactive if we are in a console, otherwise use defaults
             if (_isatty(_fileno(stdin))) {
                 config.InteractiveConfig();
                 config.SaveConfig(config_path.string());
@@ -154,7 +147,6 @@ int main() {
         int port = config.GetPort();
         std::string raw_data_dir = config.GetDataDirectory();
         
-        // If data dir is relative (starts with .. or .), resolve it relative to exe_dir
         fs::path data_dir_path;
         if (fs::path(raw_data_dir).is_relative()) {
              data_dir_path = fs::absolute(fs::path(exe_dir) / raw_data_dir);
@@ -174,11 +166,17 @@ int main() {
             throw std::runtime_error("Cannot create data directory. Permission denied? " + std::string(e.what()));
         }
         
-        // Ensure the main DB file exists
         fs::path db_path = data_dir_path / "francodb.db";
-        CreateFileIfMissing(db_path.string());
-        
+
+        // --- FIX: CORRUPTION CHECK ---
+        // If file exists but is 0 bytes, delete it so DiskManager can create it properly.
+        if (IsFileCorrupt(db_path.string())) {
+            std::cout << "[WARN] Detected corrupted/empty database file. Deleting to reset..." << std::endl;
+            fs::remove(db_path);
+        }
+
         // 4. Initialize Components
+        // DiskManager will create the file and header if it's missing.
         auto disk_manager = std::make_unique<DiskManager>(db_path.string());
         if (encryption_enabled && !encryption_key.empty()) {
             disk_manager->SetEncryptionKey(encryption_key);
@@ -218,7 +216,6 @@ int main() {
         
     } catch (const std::exception &e) {
         std::cerr << "[CRASH] Server failed: " << e.what() << std::endl;
-        // Check if it's a permission error
         std::string msg = e.what();
         if (msg.find("Permission denied") != std::string::npos || msg.find("Access is denied") != std::string::npos) {
             std::cerr << "[HINT] Try running as Administrator." << std::endl;
