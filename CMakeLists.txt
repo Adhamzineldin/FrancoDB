@@ -2,26 +2,25 @@ cmake_minimum_required(VERSION 3.10)
 project(FrancoDB)
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-unused-parameter")
 
 # ==========================================
-# 1. SETUP SOURCES
+# 1. SETUP PATHS
 # ==========================================
-# Use absolute paths to avoid "No SOURCES given" errors
 set(SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 set(TEST_DIR "${CMAKE_SOURCE_DIR}/test")
 
-# Find all source files
+# ==========================================
+# 2. BUILD THE LIBRARY (The Engine Core)
+# ==========================================
+# Find all source files in src/
 file(GLOB_RECURSE FRANCODB_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.cpp")
 file(GLOB_RECURSE FRANCODB_HEADERS CONFIGURE_DEPENDS "${SRC_DIR}/include/*.h")
 
-# Exclude main.cpp and shell.cpp from the Library (Lib should only be the engine)
-list(FILTER FRANCODB_SOURCES EXCLUDE REGEX ".*/main.cpp$")
-list(FILTER FRANCODB_SOURCES EXCLUDE REGEX ".*/shell.cpp$")
+# CRITICAL: Exclude the App Entry Points (Server & Shell) from the Library
+# We don't want 'main()' functions inside our library.
+list(FILTER FRANCODB_SOURCES EXCLUDE REGEX ".*/src/cmd/.*")
 
-# ==========================================
-# 2. BUILD THE LIBRARY (Kernel)
-# ==========================================
 add_library(francodb_lib
         ${FRANCODB_SOURCES}
         ${FRANCODB_HEADERS}
@@ -30,27 +29,39 @@ add_library(francodb_lib
 target_include_directories(francodb_lib PUBLIC "${SRC_DIR}/include")
 
 # ==========================================
-# 3. BUILD THE SHELL (Application)
+# 3. BUILD THE SERVER (Networking Daemon)
 # ==========================================
-if(EXISTS "${SRC_DIR}/shell.cpp")
-    add_executable(francodb_shell "${SRC_DIR}/shell.cpp")
-    target_link_libraries(francodb_shell francodb_lib)
+# Path to Server Main
+set(SERVER_SRC "${SRC_DIR}/cmd/server/main.cpp")
+
+if(EXISTS "${SERVER_SRC}")
+    add_executable(francodb_server "${SERVER_SRC}")
+    target_link_libraries(francodb_server francodb_lib)
+
+    # Link Networking Libraries (Windows vs Linux)
+    if(WIN32)
+        target_link_libraries(francodb_server ws2_32)
+    else()
+        target_link_libraries(francodb_server pthread)
+    endif()
 else()
-    message(WARNING "src/shell.cpp not found! Skipping shell build.")
+    message(WARNING "Server source not found at: ${SERVER_SRC}")
 endif()
 
 # ==========================================
-# 4. BUILD TESTS
+# 4. BUILD THE SHELL (Interactive CLI)
 # ==========================================
-# Helper macro to add tests easily
-macro(add_franco_test test_name file_path)
-    if(EXISTS "${file_path}")
-        add_executable(${test_name} "${file_path}")
-        target_link_libraries(${test_name} francodb_lib)
-    endif()
-endmacro()
+# Path to Shell Main
+set(SHELL_SRC "${SRC_DIR}/cmd/shell/shell.cpp")
 
+if(EXISTS "${SHELL_SRC}")
+    add_executable(francodb_shell "${SHELL_SRC}")
+    target_link_libraries(francodb_shell francodb_lib)
+else()
+    message(WARNING "Shell source not found at: ${SHELL_SRC}")
+endif()
 
-
-# 4. Add Tests (Optional for now, but good for scalability)
+# ==========================================
+# 5. BUILD TESTS
+# ==========================================
 add_subdirectory(test)
