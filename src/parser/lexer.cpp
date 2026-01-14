@@ -78,7 +78,21 @@ namespace francodb {
             case ')': return {TokenType::R_PAREN, ")"};
             case ';': return {TokenType::SEMICOLON, ";"};
             case '=': return {TokenType::EQUALS, "="};
-                // Note: If we support math later, independent '-' would go here.
+            case '>':
+                if (cursor_ < input_.length() && input_[cursor_] == '=') {
+                    cursor_++;
+                    return {TokenType::IDENTIFIER, ">="};
+                } else {
+                    return {TokenType::IDENTIFIER, ">"};
+                }
+            case '<':
+                if (cursor_ < input_.length() && input_[cursor_] == '=') {
+                    cursor_++;
+                    return {TokenType::IDENTIFIER, "<="};
+                } else {
+                    return {TokenType::IDENTIFIER, "<"};
+                }
+            // Note: If we support math later, independent '-' would go here.
             default:  return {TokenType::INVALID, std::string(1, c)};
         }
     }

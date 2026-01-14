@@ -80,15 +80,15 @@ async function main() {
         console.log('Connected to FrancoDB!');
         
         // Create table
-        let result = await client.query('CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50), age INT);\n');
+        let result = await client.query('2e3mel gadwal users (id rakam asasi, name gomla, age rakam);\\n');
         console.log('Create table:', result);
         
         // Insert data
-        result = await client.query("INSERT INTO users VALUES (1, 'Alice', 25);\n");
+        result = await client.query("emla gowa users elkeyam (1, 'Alice', 25);\\n");
         console.log('Insert:', result);
         
         // Query data
-        result = await client.query('SELECT * FROM users WHERE age > 20;\n');
+        result = await client.query('2e5tar * men users lama age > 20;\\n');
         console.log('Query result:', result);
         
         client.disconnect();

@@ -21,8 +21,8 @@ namespace francodb {
 
     struct WhereCondition {
         std::string column;
-        std::string op; // "=" or "IN"
-        Value value;  // For "=" operator
+        std::string op; // "=", ">", "<", ">=", "<=", or "IN"
+        Value value;  // For =, >, <, >=, <= operators
         std::vector<Value> in_values; // For "IN" operator
         LogicType next_logic; // Does "WE" or "AW" come after this?
     };

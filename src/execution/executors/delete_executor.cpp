@@ -140,6 +140,22 @@ bool DeleteExecutor::EvaluatePredicate(const Tuple &tuple) {
             } else if (tuple_val.GetTypeId() == TypeId::DECIMAL) {
                 match = (std::abs(tuple_val.GetAsDouble() - cond.value.GetAsDouble()) < 0.0001);
             }
+        } else if (cond.op == ">") {
+            if (tuple_val.GetTypeId() == TypeId::INTEGER) match = (tuple_val.GetAsInteger() > cond.value.GetAsInteger());
+            else if (tuple_val.GetTypeId() == TypeId::DECIMAL) match = (tuple_val.GetAsDouble() > cond.value.GetAsDouble());
+            else match = (tuple_val.GetAsString() > cond.value.GetAsString());
+        } else if (cond.op == "<") {
+            if (tuple_val.GetTypeId() == TypeId::INTEGER) match = (tuple_val.GetAsInteger() < cond.value.GetAsInteger());
+            else if (tuple_val.GetTypeId() == TypeId::DECIMAL) match = (tuple_val.GetAsDouble() < cond.value.GetAsDouble());
+            else match = (tuple_val.GetAsString() < cond.value.GetAsString());
+        } else if (cond.op == ">=") {
+            if (tuple_val.GetTypeId() == TypeId::INTEGER) match = (tuple_val.GetAsInteger() >= cond.value.GetAsInteger());
+            else if (tuple_val.GetTypeId() == TypeId::DECIMAL) match = (tuple_val.GetAsDouble() >= cond.value.GetAsDouble());
+            else match = (tuple_val.GetAsString() >= cond.value.GetAsString());
+        } else if (cond.op == "<=") {
+            if (tuple_val.GetTypeId() == TypeId::INTEGER) match = (tuple_val.GetAsInteger() <= cond.value.GetAsInteger());
+            else if (tuple_val.GetTypeId() == TypeId::DECIMAL) match = (tuple_val.GetAsDouble() <= cond.value.GetAsDouble());
+            else match = (tuple_val.GetAsString() <= cond.value.GetAsString());
         }
 
         if (i == 0) result = match;

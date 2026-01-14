@@ -528,8 +528,12 @@ std::vector<WhereCondition> Parser::ParseWhereClause() {
         } else if (Match(TokenType::EQUALS)) {
             cond.value = ParseValue();
             cond.op = "=";
+        } else if (current_token_.text == ">=" || current_token_.text == "<=" || current_token_.text == ">" || current_token_.text == "<") {
+            cond.op = current_token_.text;
+            Advance();
+            cond.value = ParseValue();
         } else {
-            throw Exception(ExceptionType::PARSER, "Expected = or FE (IN)");
+            throw Exception(ExceptionType::PARSER, "Expected =, >, <, >=, <= or FE (IN)");
         }
 
         if (Match(TokenType::AND)) {

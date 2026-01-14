@@ -5,7 +5,7 @@
 #include <filesystem>
 
 namespace francodb {
-    constexpr char FRAME_FILE_MAGIC[] = "FRANCODB";
+    constexpr char FRAME_FILE_MAGIC[] = "FRANCO_DATABASE_MADE_BY_MAAYN";
     constexpr size_t MAGIC_LEN = sizeof(FRAME_FILE_MAGIC) - 1; 
 
     // New Magic Header for the Metadata File
@@ -131,17 +131,21 @@ namespace francodb {
     }
 
     void DiskManager::WritePage(uint32_t page_id, const char *page_data) {
+        // SAFEGUARD: Only allow writing to page 0 if the data is the magic header
+        if (page_id == 0) {
+            if (std::memcmp(page_data, FRAME_FILE_MAGIC, MAGIC_LEN) != 0) {
+                throw std::runtime_error("Attempt to overwrite page 0 (magic header) with invalid data. Aborted.");
+            }
+        }
         // Encrypt if encryption is enabled (make a copy to avoid modifying original)
         char encrypted_data[PAGE_SIZE];
         const char* data_to_write = page_data;
-        
         if (encryption_enabled_ && !encryption_key_.empty() && page_id > 0) {
             // Don't encrypt page 0 (magic header)
             std::memcpy(encrypted_data, page_data, PAGE_SIZE);
             Encryption::EncryptXOR(encryption_key_, encrypted_data, PAGE_SIZE);
             data_to_write = encrypted_data;
         }
-        
         uint32_t offset = page_id * PAGE_SIZE;
 
 #ifdef _WIN32
@@ -243,3 +247,4 @@ namespace francodb {
     }
     
 } // namespace francodb
+

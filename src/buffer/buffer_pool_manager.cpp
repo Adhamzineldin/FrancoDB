@@ -157,6 +157,10 @@ namespace francodb {
 
     bool BufferPoolManager::FlushPage(page_id_t page_id) {
         std::lock_guard<std::mutex> guard(latch_);
+        if (page_id == 0) {
+            // Never flush or write page 0 (magic header). Only DiskManager writes page 0 during DB creation.
+            return false;
+        }
         if (page_table_.find(page_id) == page_table_.end()) return false;
         frame_id_t frame_id = page_table_[page_id];
         Page *page = &pages_[frame_id];
@@ -180,6 +184,7 @@ namespace francodb {
     void BufferPoolManager::FlushAllPages() {
         std::lock_guard<std::mutex> guard(latch_);
         for (auto const &[page_id, frame_id]: page_table_) {
+            if (page_id == 0) continue; // Never flush or write page 0
             Page *page = &pages_[frame_id];
             if (page->IsDirty()) {
                 disk_manager_->WritePage(page_id, page->GetData());

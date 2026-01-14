@@ -60,15 +60,15 @@ if __name__ == "__main__":
         print("Connected to FrancoDB!")
         
         # Create table
-        result = client.query("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50), age INT);\n")
+        result = client.query("2e3mel gadwal users (id rakam asasi, name gomla, age rakam);\n")
         print(f"Create table: {result}")
         
         # Insert data
-        result = client.query("INSERT INTO users VALUES (1, 'Alice', 25);\n")
+        result = client.query("emla gowa users elkeyam (1, 'Alice', 25);\n")
         print(f"Insert: {result}")
         
         # Query data
-        result = client.query("SELECT * FROM users WHERE age > 20;\n")
+        result = client.query("2e5tar * men users lama age > 20;\n")
         print(f"Query result:\n{result}")
         
         client.disconnect()
