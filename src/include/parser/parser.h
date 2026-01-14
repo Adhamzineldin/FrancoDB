@@ -35,8 +35,10 @@ namespace francodb {
         std::unique_ptr<LoginStatement> ParseLogin();
         std::unique_ptr<CreateUserStatement> ParseCreateUser();
         std::unique_ptr<AlterUserRoleStatement> ParseAlterUserRole();
+        std::unique_ptr<DeleteUserStatement> ParseDeleteUser();
         std::unique_ptr<ShowUsersStatement> ParseShowUsers();
         std::unique_ptr<ShowDatabasesStatement> ParseShowDatabases();
+        std::unique_ptr<ShowTablesStatement> ParseShowTables();
         std::unique_ptr<WhoAmIStatement> ParseWhoAmI();
         std::unique_ptr<ShowStatusStatement> ParseShowStatus();
 

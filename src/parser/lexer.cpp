@@ -44,7 +44,7 @@ namespace francodb {
         {"2EBDA2", TokenType::BEGIN_TXN},     // BEGIN transaction
         {"2ERGA3", TokenType::ROLLBACK},     // ROLLBACK transaction
         {"2AKED", TokenType::COMMIT},       // COMMIT transaction
-        
+        {"FE", TokenType::IN_OP}, // Arabic: FE = IN
     };
 
     Token Lexer::NextToken() {

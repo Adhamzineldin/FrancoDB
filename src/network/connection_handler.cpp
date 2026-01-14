@@ -46,14 +46,21 @@ namespace francodb {
             if (stmt->GetType() == StatementType::LOGIN) {
                 auto *login = dynamic_cast<LoginStatement *>(stmt.get());
                 if (!login) return "ERROR: Invalid LOGIN\n";
-                
-                UserRole role;
-                if (auth_manager_->Authenticate(login->username_, login->password_, role)) {
+                UserRole login_role;
+                if (auth_manager_->Authenticate(login->username_, login->password_, login_role)) {
                     session_->is_authenticated = true;
                     session_->current_user = login->username_;
-                    session_->role = role;
-                    return "LOGIN OK (Role: " + std::string(role == UserRole::ADMIN ? "ADMIN" : 
-                                                              role == UserRole::USER ? "USER" : "READONLY") + ")\n";
+                    session_->current_db = "default";
+                    // Use role from Authenticate, but verify with GetUserRole for per-db roles
+                    session_->role = auth_manager_->GetUserRole(session_->current_user, session_->current_db);
+                    // If Authenticate returned SUPERADMIN (for root), ensure it's preserved
+                    if (login_role == UserRole::SUPERADMIN) {
+                        session_->role = UserRole::SUPERADMIN;
+                    }
+                    return "LOGIN OK (Role: " + std::string(session_->role == UserRole::SUPERADMIN ? "SUPERADMIN" : 
+                                                              session_->role == UserRole::ADMIN ? "ADMIN" : 
+                                                              session_->role == UserRole::USER ? "USER" : 
+                                                              session_->role == UserRole::READONLY ? "READONLY" : "DENIED") + ")\n";
                 }
                 return "ERROR: Authentication failed\n";
             }
@@ -66,121 +73,191 @@ namespace francodb {
             if (stmt->GetType() == StatementType::USE_DB) {
                 auto *use_db = dynamic_cast<UseDatabaseStatement *>(stmt.get());
                 if (!use_db) return "ERROR: Invalid USE\n";
+                
+                // Check if user has access to this database
+                if (!auth_manager_->HasDatabaseAccess(session_->current_user, use_db->db_name_)) {
+                    return "ERROR: Access denied to database " + use_db->db_name_ + "\n";
+                }
+                
                 session_->current_db = use_db->db_name_;
+                // Get role for the new database - this should return SUPERADMIN if user is SUPERADMIN
+                session_->role = auth_manager_->GetUserRole(session_->current_user, session_->current_db);
+                // Ensure SUPERADMIN users always get SUPERADMIN role
+                if (auth_manager_->IsSuperAdmin(session_->current_user)) {
+                    session_->role = UserRole::SUPERADMIN;
+                }
                 return "Using database: " + use_db->db_name_ + "\n";
             }
 
             // Management commands
             if (stmt->GetType() == StatementType::WHOAMI) {
                 return "User: " + session_->current_user + " | Role: " +
-                       std::string(session_->role == UserRole::ADMIN ? "ADMIN" :
-                                   session_->role == UserRole::USER ? "USER" : "READONLY") + "\n";
+                       std::string(session_->role == UserRole::SUPERADMIN ? "SUPERADMIN" :
+                                   session_->role == UserRole::ADMIN ? "ADMIN" :
+                                   session_->role == UserRole::USER ? "USER" :
+                                   session_->role == UserRole::READONLY ? "READONLY" : "DENIED") + "\n";
             }
             if (stmt->GetType() == StatementType::SHOW_STATUS) {
                 return "User: " + session_->current_user + "\nDB: " + session_->current_db + "\n";
             }
             // CREATE USER
             if (stmt->GetType() == StatementType::CREATE_USER) {
-                if (session_->role != UserRole::ADMIN) return "ERROR: Permission denied. CREATE USER requires ADMIN role.\n";
+                if (session_->role != UserRole::SUPERADMIN && session_->role != UserRole::ADMIN) return "ERROR: Permission denied. CREATE USER requires ADMIN or SUPERADMIN role.\n";
                 auto *create_user = dynamic_cast<CreateUserStatement *>(stmt.get());
                 if (!create_user) return "ERROR: Invalid CREATE USER\n";
-                
                 UserRole role;
-                if (create_user->role_ == "ADMIN") role = UserRole::ADMIN;
-                else if (create_user->role_ == "USER") role = UserRole::USER;
-                else if (create_user->role_ == "READONLY") role = UserRole::READONLY;
-                else return "ERROR: Invalid role. Must be ADMIN, USER, or READONLY\n";
-                
+                std::string input_role = create_user->role_;
+                std::transform(input_role.begin(), input_role.end(), input_role.begin(), ::toupper);
+                if (input_role == "SUPERADMIN") role = UserRole::SUPERADMIN;
+                else if (input_role == "ADMIN") role = UserRole::ADMIN;
+                else if (input_role == "USER") role = UserRole::USER;
+                else if (input_role == "READONLY") role = UserRole::READONLY;
+                else if (input_role == "DENIED") role = UserRole::DENIED;
+                else return "ERROR: Invalid role. Must be SUPERADMIN, ADMIN, USER, READONLY, or DENIED\n";
                 if (auth_manager_->CreateUser(create_user->username_, create_user->password_, role)) {
                     return "CREATE USER " + create_user->username_ + " OK\n";
                 }
                 return "ERROR: User already exists\n";
             }
-            
-            // ALTER USER ROLE
+            // ALTER USER ROLE IN DB
             if (stmt->GetType() == StatementType::ALTER_USER_ROLE) {
-                if (session_->role != UserRole::ADMIN) return "ERROR: Permission denied. ALTER USER requires ADMIN role.\n";
+                if (session_->role != UserRole::SUPERADMIN && session_->role != UserRole::ADMIN) return "ERROR: Permission denied. ALTER USER requires ADMIN or SUPERADMIN role.\n";
                 auto *alter_user = dynamic_cast<AlterUserRoleStatement *>(stmt.get());
                 if (!alter_user) return "ERROR: Invalid ALTER USER\n";
-                
                 UserRole new_role;
-                if (alter_user->role_ == "ADMIN") new_role = UserRole::ADMIN;
-                else if (alter_user->role_ == "USER") new_role = UserRole::USER;
-                else if (alter_user->role_ == "READONLY") new_role = UserRole::READONLY;
-                else return "ERROR: Invalid role. Must be ADMIN, USER, or READONLY\n";
-                
-                if (auth_manager_->SetUserRole(alter_user->username_, new_role)) {
-                    return "ALTER USER " + alter_user->username_ + " ROLE " + alter_user->role_ + " OK\n";
+                std::string input_role = alter_user->role_;
+                std::transform(input_role.begin(), input_role.end(), input_role.begin(), ::toupper);
+                if (input_role == "SUPERADMIN") {
+                    // Only SUPERADMIN can assign SUPERADMIN role
+                    if (session_->role != UserRole::SUPERADMIN) {
+                        return "ERROR: Permission denied. Only SUPERADMIN can assign SUPERADMIN role.\n";
+                    }
+                    new_role = UserRole::SUPERADMIN;
+                } else if (input_role == "ADMIN") new_role = UserRole::ADMIN;
+                else if (input_role == "USER") new_role = UserRole::USER;
+                else if (input_role == "READONLY") new_role = UserRole::READONLY;
+                else if (input_role == "DENIED") new_role = UserRole::DENIED;
+                else return "ERROR: Invalid role. Must be SUPERADMIN, ADMIN, USER, READONLY, or DENIED\n";
+                // Support ALTER USER <username> ROLE <role> IN <db>
+                // If db_name is empty, use current database
+                std::string db = session_->current_db;
+                if (!alter_user->db_name_.empty()) {
+                    db = alter_user->db_name_;
+                }
+                if (auth_manager_->SetUserRole(alter_user->username_, db, new_role)) {
+                    return "ALTER USER " + alter_user->username_ + " ROLE " + input_role + " IN " + db + " OK\n";
                 }
                 return "ERROR: User not found\n";
             }
-            
+            // DELETE USER
+            if (stmt->GetType() == StatementType::DELETE_USER) {
+                if (session_->role != UserRole::SUPERADMIN && session_->role != UserRole::ADMIN) return "ERROR: Permission denied. DELETE USER requires ADMIN or SUPERADMIN role.\n";
+                auto *delete_user = dynamic_cast<DeleteUserStatement *>(stmt.get());
+                if (!delete_user) return "ERROR: Invalid DELETE USER\n";
+                if (auth_manager_->DeleteUser(delete_user->username_)) {
+                    return "DELETE USER " + delete_user->username_ + " OK\n";
+                }
+                return "ERROR: User not found or cannot be deleted\n";
+            }
             // SHOW USERS
             if (stmt->GetType() == StatementType::SHOW_USERS) {
-                if (session_->role != UserRole::ADMIN) return "ERROR: Permission denied.\n";
-
-                // Ask AuthManager for all users from the system DB cache
+                if (session_->role != UserRole::SUPERADMIN && session_->role != UserRole::ADMIN) return "ERROR: Permission denied.\n";
                 auto users = auth_manager_->GetAllUsers();
-                if (users.empty()) {
-                    return "No users found\n";
-                }
-
+                if (users.empty()) return "No users found\n";
                 std::ostringstream out;
                 out << "Users:\n";
-                out << "  username | role\n";
-                out << "  ----------------\n";
+                out << "  username | db | role\n";
+                out << "  ----------------------\n";
                 for (const auto &u : users) {
-                    std::string role_str =
-                        (u.role == UserRole::ADMIN) ? "ADMIN" :
-                        (u.role == UserRole::USER) ? "USER" : "READONLY";
-                    out << "  " << u.username << " | " << role_str << "\n";
+                    for (const auto& [db, role] : u.db_roles) {
+                        std::string role_str =
+                            (role == UserRole::SUPERADMIN) ? "SUPERADMIN" :
+                            (role == UserRole::ADMIN) ? "ADMIN" :
+                            (role == UserRole::USER) ? "USER" :
+                            (role == UserRole::READONLY) ? "READONLY" : "DENIED";
+                        out << "  " << u.username << " | " << db << " | " << role_str << "\n";
+                    }
                 }
                 return out.str();
             }
-            
             // SHOW DATABASES
             if (stmt->GetType() == StatementType::SHOW_DATABASES) {
                 std::ostringstream out;
                 out << "Databases:\n";
-                out << "  default\n";
-                // List databases from data/ directory
+                
+                // Check if user is SUPERADMIN (can see all databases)
+                bool is_superadmin = auth_manager_->IsSuperAdmin(session_->current_user);
+                
                 if (std::filesystem::exists("data")) {
                     for (const auto& entry : std::filesystem::directory_iterator("data")) {
                         if (entry.is_regular_file() && entry.path().extension() == ".francodb") {
                             std::string db_name = entry.path().stem().string();
-                            out << "  " << db_name << "\n";
+                            
+                            // SUPERADMIN can see all databases, others only see accessible ones
+                            if (is_superadmin || auth_manager_->HasDatabaseAccess(session_->current_user, db_name)) {
+                                UserRole r = auth_manager_->GetUserRole(session_->current_user, db_name);
+                                std::string role_str = (r == UserRole::SUPERADMIN) ? " (SUPERADMIN)" :
+                                                       (r == UserRole::ADMIN) ? " (ADMIN)" :
+                                                       (r == UserRole::USER) ? " (USER)" :
+                                                       (r == UserRole::READONLY) ? " (READONLY)" : "";
+                                out << "  " << db_name << role_str << "\n";
+                            }
                         }
                     }
                 }
                 return out.str();
             }
-
-            // Handle CREATE DATABASE using separate file per DB (Option B)
+            // SHOW TABLES
+            if (stmt->GetType() == StatementType::SHOW_TABLES) {
+                std::ostringstream out;
+                out << "Tables in " << session_->current_db << ":\n";
+                
+                // Get catalog from execution engine
+                Catalog* catalog = engine_->GetCatalog();
+                if (catalog == nullptr) {
+                    return "ERROR: Catalog not available\n";
+                }
+                
+                // Get all table names from catalog
+                std::vector<std::string> table_names = catalog->GetAllTableNames();
+                if (table_names.empty()) {
+                    out << "  (no tables)\n";
+                } else {
+                    for (const auto& table_name : table_names) {
+                        out << "  " << table_name << "\n";
+                    }
+                }
+                return out.str();
+            }
+            // CREATE DATABASE
             if (stmt->GetType() == StatementType::CREATE_DB) {
-                // Check RBAC permission
                 if (!auth_manager_->HasPermission(session_->role, StatementType::CREATE_DB)) {
                     return "ERROR: Permission denied. CREATE DATABASE requires ADMIN role.\n";
                 }
-
                 auto *create_db = dynamic_cast<CreateDatabaseStatement *>(stmt.get());
                 if (!create_db) return "ERROR: Invalid CREATE DATABASE\n";
-
                 try {
                     std::filesystem::create_directories("data");
-                    // Each database gets its own .francodb file under data/
                     DiskManager new_db("data/" + create_db->db_name_);
-                    // DiskManager ctor ensures magic header and free page map
+                    // Set creator's role in new db: SUPERADMIN if they're SUPERADMIN, otherwise ADMIN
+                    UserRole creator_role = (session_->role == UserRole::SUPERADMIN || 
+                                            auth_manager_->IsSuperAdmin(session_->current_user)) 
+                                            ? UserRole::SUPERADMIN : UserRole::ADMIN;
+                    auth_manager_->SetUserRole(session_->current_user, create_db->db_name_, creator_role);
+                    // Note: Other users will get DENIED by default (handled in GetUserRole when role not found)
                     return "CREATE DATABASE " + create_db->db_name_ + " OK\n";
                 } catch (const std::exception &e) {
                     return std::string("ERROR: Failed to create database: ") + e.what() + "\n";
                 }
             }
-
             // RBAC Permission Check before executing statement
+            session_->role = auth_manager_->GetUserRole(session_->current_user, session_->current_db);
             if (!auth_manager_->HasPermission(session_->role, stmt->GetType())) {
                 return "ERROR: Permission denied. Your role (" + 
-                       std::string(session_->role == UserRole::ADMIN ? "ADMIN" : 
-                                  session_->role == UserRole::USER ? "USER" : "READONLY") + 
+                       std::string(session_->role == UserRole::SUPERADMIN ? "SUPERADMIN" : 
+                                   session_->role == UserRole::ADMIN ? "ADMIN" : 
+                                  session_->role == UserRole::USER ? "USER" : 
+                                  session_->role == UserRole::READONLY ? "READONLY" : "DENIED") + 
                        ") does not have permission for this operation.\n";
             }
 
@@ -241,7 +318,8 @@ namespace francodb {
                     session_->current_user = login->username_;
                     session_->role = role;
                     return protocol_->Serialize(ExecutionResult::Message("LOGIN OK (Role: " + 
-                        std::string(role == UserRole::ADMIN ? "ADMIN" : 
+                        std::string(role == UserRole::SUPERADMIN ? "SUPERADMIN" : 
+                                   role == UserRole::ADMIN ? "ADMIN" : 
                                    role == UserRole::USER ? "USER" : "READONLY") + ")"));
                 }
                 return protocol_->SerializeError("Authentication failed");
@@ -255,7 +333,18 @@ namespace francodb {
             if (stmt->GetType() == StatementType::USE_DB) {
                 auto *use_db = dynamic_cast<UseDatabaseStatement *>(stmt.get());
                 if (!use_db) return protocol_->SerializeError("Invalid USE");
+                
+                // Check if user has access to this database
+                if (!auth_manager_->HasDatabaseAccess(session_->current_user, use_db->db_name_)) {
+                    return protocol_->SerializeError("Access denied to database " + use_db->db_name_);
+                }
+                
                 session_->current_db = use_db->db_name_;
+                session_->role = auth_manager_->GetUserRole(session_->current_user, session_->current_db);
+                // Ensure SUPERADMIN users always get SUPERADMIN role
+                if (auth_manager_->IsSuperAdmin(session_->current_user)) {
+                    session_->role = UserRole::SUPERADMIN;
+                }
                 return protocol_->Serialize(ExecutionResult::Message("Using database: " + use_db->db_name_));
             }
 
@@ -270,6 +359,12 @@ namespace francodb {
                 try {
                     std::filesystem::create_directories("data");
                     DiskManager new_db("data/" + create_db->db_name_);
+                    // Set creator's role in new db: SUPERADMIN if they're SUPERADMIN, otherwise ADMIN
+                    UserRole creator_role = (session_->role == UserRole::SUPERADMIN || 
+                                            auth_manager_->IsSuperAdmin(session_->current_user)) 
+                                            ? UserRole::SUPERADMIN : UserRole::ADMIN;
+                    auth_manager_->SetUserRole(session_->current_user, create_db->db_name_, creator_role);
+                    // Note: Other users will get DENIED by default (handled in GetUserRole when role not found)
                     return protocol_->Serialize(ExecutionResult::Message("CREATE DATABASE " + create_db->db_name_ + " OK"));
                 } catch (const std::exception &e) {
                     return protocol_->SerializeError("Failed to create database: " + std::string(e.what()));
@@ -338,7 +433,8 @@ namespace francodb {
                     session_->current_user = login->username_;
                     session_->role = role;
                     return protocol_->Serialize(ExecutionResult::Message("LOGIN OK (Role: " + 
-                        std::string(role == UserRole::ADMIN ? "ADMIN" : 
+                        std::string(role == UserRole::SUPERADMIN ? "SUPERADMIN" : 
+                                   role == UserRole::ADMIN ? "ADMIN" : 
                                    role == UserRole::USER ? "USER" : "READONLY") + ")"));
                 }
                 return protocol_->SerializeError("Authentication failed");
@@ -352,7 +448,18 @@ namespace francodb {
             if (stmt->GetType() == StatementType::USE_DB) {
                 auto *use_db = dynamic_cast<UseDatabaseStatement *>(stmt.get());
                 if (!use_db) return protocol_->SerializeError("Invalid USE");
+                
+                // Check if user has access to this database
+                if (!auth_manager_->HasDatabaseAccess(session_->current_user, use_db->db_name_)) {
+                    return protocol_->SerializeError("Access denied to database " + use_db->db_name_);
+                }
+                
                 session_->current_db = use_db->db_name_;
+                session_->role = auth_manager_->GetUserRole(session_->current_user, session_->current_db);
+                // Ensure SUPERADMIN users always get SUPERADMIN role
+                if (auth_manager_->IsSuperAdmin(session_->current_user)) {
+                    session_->role = UserRole::SUPERADMIN;
+                }
                 return protocol_->Serialize(ExecutionResult::Message("Using database: " + use_db->db_name_));
             }
 
@@ -367,6 +474,12 @@ namespace francodb {
                 try {
                     std::filesystem::create_directories("data");
                     DiskManager new_db("data/" + create_db->db_name_);
+                    // Set creator's role in new db: SUPERADMIN if they're SUPERADMIN, otherwise ADMIN
+                    UserRole creator_role = (session_->role == UserRole::SUPERADMIN || 
+                                            auth_manager_->IsSuperAdmin(session_->current_user)) 
+                                            ? UserRole::SUPERADMIN : UserRole::ADMIN;
+                    auth_manager_->SetUserRole(session_->current_user, create_db->db_name_, creator_role);
+                    // Note: Other users will get DENIED by default (handled in GetUserRole when role not found)
                     return protocol_->Serialize(ExecutionResult::Message("CREATE DATABASE " + create_db->db_name_ + " OK"));
                 } catch (const std::exception &e) {
                     return protocol_->SerializeError("Failed to create database: " + std::string(e.what()));

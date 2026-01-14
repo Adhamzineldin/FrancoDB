@@ -59,6 +59,13 @@ std::unique_ptr<Statement> Parser::ParseQuery() {
     } 
     // 5. DELETE
     else if (current_token_.type == TokenType::DELETE_CMD) {
+        Advance(); // Eat '2EMSA7'
+        // Check if it's DELETE USER
+        if (current_token_.type == TokenType::USER) {
+            Advance(); // Eat USER
+            return ParseDeleteUser();
+        }
+        // Otherwise it's DELETE FROM table
         return ParseDelete();
     }
     // 6. BEGIN TRANSACTION
@@ -111,8 +118,13 @@ std::unique_ptr<Statement> Parser::ParseQuery() {
             if (!Match(TokenType::SEMICOLON))
                 throw Exception(ExceptionType::PARSER, "Expected ; after SHOW DATABASES");
             return std::make_unique<ShowDatabasesStatement>();
+        } else if (current_token_.type == TokenType::TABLE) {
+            Advance(); // Eat TABLE / GADWAL
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after SHOW TABLES");
+            return std::make_unique<ShowTablesStatement>();
         }
-        throw Exception(ExceptionType::PARSER, "Expected USER or DATABASES after SHOW");
+        throw Exception(ExceptionType::PARSER, "Expected USER, DATABASES, or TABLES after SHOW");
     }
 
     throw Exception(ExceptionType::PARSER, "Unknown command start: " + current_token_.text);
@@ -313,26 +325,43 @@ std::unique_ptr<CreateUserStatement> Parser::ParseCreateUser() {
 
 std::unique_ptr<AlterUserRoleStatement> Parser::ParseAlterUserRole() {
     auto stmt = std::make_unique<AlterUserRoleStatement>();
-    
     // USER keyword already consumed by caller
     // Username
     if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
         throw Exception(ExceptionType::PARSER, "Expected username after USER");
     stmt->username_ = current_token_.text;
     Advance();
-    
     // ROLE keyword
     if (!Match(TokenType::ROLE))
         throw Exception(ExceptionType::PARSER, "Expected ROLE after username");
-    
     // New role
     if (current_token_.type != TokenType::IDENTIFIER)
         throw Exception(ExceptionType::PARSER, "Expected role (ADMIN/USER/READONLY) after ROLE");
     stmt->role_ = current_token_.text;
     Advance();
-    
+    // Optional: IN <db>
+    if (current_token_.type == TokenType::IN_OP) {
+        Advance();
+        if (current_token_.type != TokenType::IDENTIFIER)
+            throw Exception(ExceptionType::PARSER, "Expected database name after IN (FE)");
+        stmt->db_name_ = current_token_.text;
+        Advance();
+    }
     if (!Match(TokenType::SEMICOLON))
         throw Exception(ExceptionType::PARSER, "Expected ; at end of ALTER USER ROLE");
+    return stmt;
+}
+
+std::unique_ptr<DeleteUserStatement> Parser::ParseDeleteUser() {
+    auto stmt = std::make_unique<DeleteUserStatement>();
+    // USER keyword already consumed by caller
+    // Username
+    if (current_token_.type != TokenType::IDENTIFIER && current_token_.type != TokenType::STRING_LIT)
+        throw Exception(ExceptionType::PARSER, "Expected username after USER");
+    stmt->username_ = current_token_.text;
+    Advance();
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; at end of DELETE USER");
     return stmt;
 }
 
@@ -341,6 +370,13 @@ std::unique_ptr<ShowDatabasesStatement> Parser::ParseShowDatabases() {
     if (!Match(TokenType::SEMICOLON))
         throw Exception(ExceptionType::PARSER, "Expected ; after SHOW DATABASES");
     return std::make_unique<ShowDatabasesStatement>();
+}
+
+std::unique_ptr<ShowTablesStatement> Parser::ParseShowTables() {
+    // TABLE already consumed by caller
+    if (!Match(TokenType::SEMICOLON))
+        throw Exception(ExceptionType::PARSER, "Expected ; after SHOW TABLES");
+    return std::make_unique<ShowTablesStatement>();
 }
 
 // EMLA GOWA users ELKEYAM (1, 'Ahmed', AH, 10.5);
@@ -392,10 +428,8 @@ std::unique_ptr<SelectStatement> Parser::ParseSelect() {
     return stmt;
 }
 
-// 2EMSA7 ...
+// 2EMSA7 ... (called after DELETE_CMD token is already consumed)
 std::unique_ptr<Statement> Parser::ParseDelete() {
-    Advance(); // Eat 2EMSA7
-
     if (Match(TokenType::TABLE)) {
         // DROP TABLE
         auto stmt = std::make_unique<DropStatement>();
@@ -479,9 +513,24 @@ std::vector<WhereCondition> Parser::ParseWhereClause() {
         cond.column = current_token_.text;
         Advance();
 
-        if (!Match(TokenType::EQUALS)) throw Exception(ExceptionType::PARSER, "Expected =");
-        cond.value = ParseValue();
-        cond.op = "=";
+        // Check for IN (FE) operator
+        if (Match(TokenType::IN_OP)) {
+            cond.op = "IN";
+            if (!Match(TokenType::L_PAREN)) throw Exception(ExceptionType::PARSER, "Expected ( after FE");
+            // Parse list of values
+            while (current_token_.type != TokenType::R_PAREN) {
+                cond.in_values.push_back(ParseValue());
+                if (current_token_.type == TokenType::COMMA) Advance();
+                else if (current_token_.type != TokenType::R_PAREN)
+                    throw Exception(ExceptionType::PARSER, "Expected , or ) in IN clause");
+            }
+            Advance(); // Eat )
+        } else if (Match(TokenType::EQUALS)) {
+            cond.value = ParseValue();
+            cond.op = "=";
+        } else {
+            throw Exception(ExceptionType::PARSER, "Expected = or FE (IN)");
+        }
 
         if (Match(TokenType::AND)) {
             cond.next_logic = LogicType::AND;

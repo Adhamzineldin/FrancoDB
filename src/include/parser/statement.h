@@ -7,7 +7,7 @@
 #include "common/value.h"
 
 namespace francodb {
-    enum class StatementType { CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, BEGIN, ROLLBACK, COMMIT, CREATE_DB, USE_DB, LOGIN, CREATE_USER, ALTER_USER_ROLE, SHOW_USERS, SHOW_DATABASES, SHOW_STATUS, WHOAMI };
+    enum class StatementType { CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, BEGIN, ROLLBACK, COMMIT, CREATE_DB, USE_DB, LOGIN, CREATE_USER, ALTER_USER_ROLE, DELETE_USER, SHOW_USERS, SHOW_DATABASES, SHOW_TABLES, SHOW_STATUS, WHOAMI };
 
     enum class LogicType { NONE, AND, OR };
 
@@ -21,8 +21,9 @@ namespace francodb {
 
     struct WhereCondition {
         std::string column;
-        std::string op; // "="
-        Value value;
+        std::string op; // "=" or "IN"
+        Value value;  // For "=" operator
+        std::vector<Value> in_values; // For "IN" operator
         LogicType next_logic; // Does "WE" or "AW" come after this?
     };
 
@@ -143,6 +144,13 @@ namespace francodb {
         StatementType GetType() const override { return StatementType::ALTER_USER_ROLE; }
         std::string username_;
         std::string role_;
+        std::string db_name_; // Added for ALTER USER ... ROLE ... IN ...
+    };
+
+    class DeleteUserStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::DELETE_USER; }
+        std::string username_;
     };
 
     class ShowUsersStatement : public Statement {
@@ -153,6 +161,11 @@ namespace francodb {
     class ShowDatabasesStatement : public Statement {
     public:
         StatementType GetType() const override { return StatementType::SHOW_DATABASES; }
+    };
+
+    class ShowTablesStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_TABLES; }
     };
 
     class WhoAmIStatement : public Statement {

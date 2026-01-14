@@ -1,0 +1,345 @@
+==========================================
+    FrancoDB Comprehensive Test Commands
+==========================================
+
+This file contains a comprehensive set of test commands for FrancoDB,
+covering multiple databases, users, roles, and various SQL operations.
+
+==========================================
+SECTION 1: CONNECTION STRINGS
+==========================================
+
+# Connect as superadmin (maayn) to default database
+maayn://maayn:root@localhost
+
+# Connect as superadmin to specific database
+maayn://maayn:root@localhost/testdb
+
+# Connect as regular user
+maayn://alice:password123@localhost/mydb
+
+# Connect with explicit port
+maayn://maayn:root@localhost:2501/production
+
+==========================================
+SECTION 2: USER MANAGEMENT (SUPERADMIN ONLY)
+==========================================
+
+# Create new users with different roles
+CREATE USER alice PASS password123 ROLE ADMIN;
+CREATE USER bob PASS secret456 ROLE USER;
+CREATE USER charlie PASS read789 ROLE READONLY;
+CREATE USER dave PASS denied999 ROLE DENIED;
+
+# Show all users
+SHOW USER;
+
+# Alter user roles (per database)
+UPDATE USER alice ROLE USER IN testdb;
+UPDATE USER bob ROLE ADMIN IN production;
+UPDATE USER charlie ROLE USER IN testdb;
+
+# Check current user
+WHOAMI;
+
+# Check status
+STATUS;
+
+==========================================
+SECTION 3: DATABASE MANAGEMENT
+==========================================
+
+# Create multiple databases
+CREATE DATABASE testdb;
+CREATE DATABASE production;
+CREATE DATABASE development;
+CREATE DATABASE staging;
+
+# List all databases
+SHOW DATABASES;
+
+# Switch between databases
+USE testdb;
+USE production;
+USE development;
+
+==========================================
+SECTION 4: TABLE OPERATIONS
+==========================================
+
+# Create tables with different schemas
+2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA(100), age RAKAM, active BOOL);
+2E3MEL GADWAL products (id RAKAM ASASI, name GOMLA(200), price KASR, category GOMLA(50));
+2E3MEL GADWAL orders (id RAKAM ASASI, user_id RAKAM, product_id RAKAM, quantity RAKAM, total KASR);
+2E3MEL GADWAL employees (id RAKAM ASASI, name GOMLA(100), department GOMLA(50), salary KASR);
+
+# Insert data into tables
+EMLA GOWA users ELKEYAM (1, 'Alice', 25, AH);
+EMLA GOWA users ELKEYAM (2, 'Bob', 30, AH);
+EMLA GOWA users ELKEYAM (3, 'Charlie', 22, LA);
+EMLA GOWA users ELKEYAM (4, 'Dave', 35, AH);
+EMLA GOWA users ELKEYAM (5, 'Eve', 28, AH);
+
+EMLA GOWA products ELKEYAM (1, 'Laptop', 999.99, 'Electronics');
+EMLA GOWA products ELKEYAM (2, 'Mouse', 29.99, 'Electronics');
+EMLA GOWA products ELKEYAM (3, 'Keyboard', 79.99, 'Electronics');
+EMLA GOWA products ELKEYAM (4, 'Desk', 199.99, 'Furniture');
+EMLA GOWA products ELKEYAM (5, 'Chair', 149.99, 'Furniture');
+
+EMLA GOWA orders ELKEYAM (1, 1, 1, 1, 999.99);
+EMLA GOWA orders ELKEYAM (2, 1, 2, 2, 59.98);
+EMLA GOWA orders ELKEYAM (3, 2, 3, 1, 79.99);
+EMLA GOWA orders ELKEYAM (4, 3, 4, 1, 199.99);
+EMLA GOWA orders ELKEYAM (5, 4, 5, 2, 299.98);
+
+==========================================
+SECTION 5: SELECT QUERIES WITH WHERE CLAUSES
+==========================================
+
+# Basic SELECT queries
+2E5TAR * MEN users;
+2E5TAR name, age MEN users;
+2E5TAR * MEN products;
+
+# SELECT with WHERE clause (= operator)
+2E5TAR * MEN users LAMA age = 25;
+2E5TAR * MEN users LAMA active = AH;
+2E5TAR * MEN products LAMA category = 'Electronics';
+2E5TAR * MEN orders LAMA user_id = 1;
+
+# SELECT with WHERE clause using IN operator (FE keyword)
+2E5TAR * MEN users LAMA age FE (25, 30, 35);
+2E5TAR * MEN users LAMA id FE (1, 2, 3);
+2E5TAR * MEN products LAMA id FE (1, 2, 3);
+2E5TAR * MEN orders LAMA user_id FE (1, 2);
+2E5TAR * MEN products LAMA category FE ('Electronics', 'Furniture');
+
+# SELECT with multiple WHERE conditions (AND/OR)
+2E5TAR * MEN users LAMA age = 25 WE active = AH;
+2E5TAR * MEN users LAMA age = 25 AW age = 30;
+2E5TAR * MEN products LAMA price > 50 WE category = 'Electronics';
+2E5TAR * MEN orders LAMA user_id = 1 WE quantity > 1;
+
+# SELECT with IN and AND/OR combinations
+2E5TAR * MEN users LAMA age FE (25, 30) WE active = AH;
+2E5TAR * MEN products LAMA id FE (1, 2, 3) AW category = 'Furniture';
+2E5TAR * MEN orders LAMA user_id FE (1, 2) WE quantity = 1;
+
+==========================================
+SECTION 6: UPDATE OPERATIONS
+==========================================
+
+# Update single row
+3ADEL users 5ALY age = 29 LAMA id = 1;
+3ADEL products 5ALY price = 899.99 LAMA id = 1;
+3ADEL users 5ALY active = LA LAMA id = 3;
+
+# Update with IN clause
+3ADEL users 5ALY age = 26 LAMA id FE (1, 2);
+3ADEL products 5ALY price = 19.99 LAMA id FE (2, 3);
+3ADEL users 5ALY active = AH LAMA id FE (1, 4, 5);
+
+# Update with multiple conditions
+3ADEL users 5ALY age = 31 LAMA id = 2 WE active = AH;
+3ADEL products 5ALY price = 79.99 LAMA category = 'Electronics' WE id FE (1, 2);
+
+==========================================
+SECTION 7: DELETE OPERATIONS
+==========================================
+
+# Delete single row
+2EMSA7 MEN users LAMA id = 5;
+2EMSA7 MEN products LAMA id = 5;
+2EMSA7 MEN orders LAMA id = 5;
+
+# Delete with IN clause
+2EMSA7 MEN users LAMA id FE (3, 4);
+2EMSA7 MEN products LAMA id FE (4, 5);
+2EMSA7 MEN orders LAMA user_id FE (3, 4);
+
+# Delete with multiple conditions
+2EMSA7 MEN users LAMA age = 25 WE active = LA;
+2EMSA7 MEN products LAMA category = 'Furniture' WE price < 150;
+
+==========================================
+SECTION 8: INDEX OPERATIONS
+==========================================
+
+# Create indexes on tables
+2E3MEL FEHRIS idx_user_age 3ALA users (age);
+2E3MEL FEHRIS idx_product_category 3ALA products (category);
+2E3MEL FEHRIS idx_order_user 3ALA orders (user_id);
+
+==========================================
+SECTION 9: TRANSACTION OPERATIONS
+==========================================
+
+# Begin transaction
+2EBDA2;
+
+# Perform multiple operations
+EMLA GOWA users ELKEYAM (6, 'Frank', 32, AH);
+EMLA GOWA products ELKEYAM (6, 'Monitor', 299.99, 'Electronics');
+3ADEL users 5ALY age = 26 LAMA id = 1;
+
+# Commit transaction
+2AKED;
+
+# Begin transaction with rollback
+2EBDA2;
+EMLA GOWA users ELKEYAM (7, 'Grace', 27, AH);
+2ERGA3;
+
+==========================================
+SECTION 10: DROP OPERATIONS
+==========================================
+
+# Drop tables (ADMIN/SUPERADMIN only)
+2EMSA7 GADWAL users;
+2EMSA7 GADWAL products;
+2EMSA7 GADWAL orders;
+2EMSA7 GADWAL employees;
+
+==========================================
+SECTION 11: MULTI-DATABASE SCENARIOS
+==========================================
+
+# Scenario: Create database and tables in different databases
+CREATE DATABASE ecommerce;
+USE ecommerce;
+2E3MEL GADWAL customers (id RAKAM ASASI, name GOMLA(100), email GOMLA(100));
+EMLA GOWA customers ELKEYAM (1, 'Customer1', 'c1@example.com');
+2E5TAR * MEN customers;
+
+# Switch to another database
+USE testdb;
+2E3MEL GADWAL test_table (id RAKAM ASASI, data GOMLA(50));
+EMLA GOWA test_table ELKEYAM (1, 'Test Data');
+2E5TAR * MEN test_table;
+
+# Switch back
+USE ecommerce;
+2E5TAR * MEN customers;
+
+==========================================
+SECTION 12: ROLE-BASED ACCESS CONTROL (RBAC) TESTS
+==========================================
+
+# Test as SUPERADMIN (maayn) - should have full access
+# All operations should work
+
+# Test as ADMIN user - should have full access except user management
+# CREATE, INSERT, SELECT, UPDATE, DELETE, DROP, CREATE_DB should work
+# CREATE USER, ALTER USER ROLE should fail
+
+# Test as USER role - should have limited access
+# SELECT, INSERT, UPDATE should work
+# DELETE, DROP, CREATE, CREATE_DB should fail
+
+# Test as READONLY user - should only have SELECT access
+# SELECT should work
+# INSERT, UPDATE, DELETE, DROP, CREATE should fail
+
+# Test as DENIED user - should have no access
+# All operations should fail
+
+==========================================
+SECTION 13: PER-DATABASE ROLE TESTS
+==========================================
+
+# Create user with default role
+CREATE USER testuser PASS testpass ROLE USER;
+
+# Grant different roles for different databases
+UPDATE USER testuser ROLE ADMIN IN testdb;
+UPDATE USER testuser ROLE READONLY IN production;
+UPDATE USER testuser ROLE USER IN development;
+
+# User should have ADMIN access in testdb
+# User should have READONLY access in production
+# User should have USER access in development
+# User should have DENIED access in other databases
+
+==========================================
+SECTION 14: EDGE CASES AND ERROR HANDLING
+==========================================
+
+# Test invalid connection strings
+maayn://invalid
+maayn://user@host
+maayn://user:pass@
+
+# Test invalid SQL syntax
+2E5TAR MEN users;
+2E5TAR * MEN;
+EMLA GOWA users;
+
+# Test operations on non-existent tables
+2E5TAR * MEN nonexistent;
+2EMSA7 MEN nonexistent LAMA id = 1;
+
+# Test operations on non-existent databases
+USE nonexistent;
+
+# Test IN clause with empty list (should fail)
+2E5TAR * MEN users LAMA id FE ();
+
+# Test IN clause with single value
+2E5TAR * MEN users LAMA id FE (1);
+
+# Test IN clause with mixed types (should handle gracefully)
+2E5TAR * MEN users LAMA id FE (1, 2, 3);
+
+==========================================
+SECTION 15: PERFORMANCE TESTS
+==========================================
+
+# Insert large number of rows
+# (Repeat multiple times)
+EMLA GOWA users ELKEYAM (10, 'User10', 20, AH);
+EMLA GOWA users ELKEYAM (11, 'User11', 21, AH);
+EMLA GOWA users ELKEYAM (12, 'User12', 22, AH);
+# ... continue for many rows
+
+# Query with index
+2E5TAR * MEN users LAMA age = 25;
+
+# Query with IN clause on indexed column
+2E5TAR * MEN users LAMA age FE (25, 30, 35);
+
+==========================================
+SECTION 16: CLEANUP COMMANDS
+==========================================
+
+# Drop all test tables
+2EMSA7 GADWAL users;
+2EMSA7 GADWAL products;
+2EMSA7 GADWAL orders;
+2EMSA7 GADWAL employees;
+2EMSA7 GADWAL customers;
+2EMSA7 GADWAL test_table;
+
+# Delete test users (as SUPERADMIN)
+# Note: User deletion commands may need to be implemented
+
+# Drop test databases
+# Note: DROP DATABASE command may need to be implemented
+
+==========================================
+NOTES:
+==========================================
+
+1. All commands should end with semicolon (;)
+2. Arabic-style keywords can be used (2E5TAR, MEN, LAMA, etc.)
+3. English keywords also work (SELECT, FROM, WHERE, etc.)
+4. Connection strings use format: maayn://user:pass@host:port/dbname
+5. Default port is 2501
+6. Default admin user is "maayn" with password "root"
+7. Roles: SUPERADMIN, ADMIN, USER, READONLY, DENIED
+8. IN keyword uses "FE" in Arabic-style queries
+9. Boolean values: AH (true), LA (false)
+10. String literals should be enclosed in single quotes
+
+==========================================
+END OF TEST COMMANDS
+==========================================

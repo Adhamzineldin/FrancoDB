@@ -178,5 +178,14 @@ IndexInfo *Catalog::GetIndex(const std::string &index_name) {
     return index_names_[index_name];
 }
 
+std::vector<std::string> Catalog::GetAllTableNames() {
+    std::lock_guard<std::mutex> lock(latch_);
+    std::vector<std::string> table_names;
+    for (const auto& [name, oid] : names_to_oid_) {
+        table_names.push_back(name);
+    }
+    return table_names;
+}
+
 } // namespace francodb
 

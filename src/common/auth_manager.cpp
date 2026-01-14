@@ -7,6 +7,7 @@
 #include <sstream>
 #include <functional>
 #include <iomanip>
+#include <algorithm> // For std::transform
 
 namespace francodb {
 
@@ -58,6 +59,7 @@ namespace francodb {
         std::vector<Column> user_cols;
         user_cols.emplace_back("username", TypeId::VARCHAR, static_cast<uint32_t>(64), true);  // Primary key
         user_cols.emplace_back("password_hash", TypeId::VARCHAR, static_cast<uint32_t>(128), false);
+        user_cols.emplace_back("db_name", TypeId::VARCHAR, static_cast<uint32_t>(64), false);
         user_cols.emplace_back("role", TypeId::VARCHAR, static_cast<uint32_t>(16), false);
         Schema user_schema(user_cols);
 
@@ -65,9 +67,9 @@ namespace francodb {
             throw Exception(ExceptionType::EXECUTION, "Failed to create franco_users table");
         }
 
-        // Insert default admin user (from config)
+        // Insert default admin user (from config) as SUPERADMIN
         std::string admin_hash = HashPassword(net::DEFAULT_ADMIN_PASSWORD);
-        std::string insert_sql = "EMLA GOWA franco_users ELKEYAM ('" + net::DEFAULT_ADMIN_USERNAME + "', '" + admin_hash + "', 'ADMIN');";
+        std::string insert_sql = "EMLA GOWA franco_users ELKEYAM ('" + net::DEFAULT_ADMIN_USERNAME + "', '" + admin_hash + "', 'default', 'SUPERADMIN');";
         
         Lexer lexer(insert_sql);
         Parser parser(std::move(lexer));
@@ -95,19 +97,28 @@ namespace francodb {
 
         // Parse result set into UserInfo objects
         for (const auto& row : res.result_set->rows) {
-            if (row.size() < 3) continue;
+            if (row.size() < 4) continue;
 
-            UserInfo user;
-            user.username = row[0];
-            user.password_hash = row[1];
-            
-            std::string role_str = row[2];
-            if (role_str == "ADMIN") user.role = UserRole::ADMIN;
-            else if (role_str == "USER") user.role = UserRole::USER;
-            else if (role_str == "READONLY") user.role = UserRole::READONLY;
-            else user.role = UserRole::READONLY; // Default
+            std::string username = row[0];
+            std::string password_hash = row[1];
+            std::string db = row[2];
+            std::string role_str = row[3];
 
-            users_cache_[user.username] = user;
+            UserRole role;
+            if (role_str == "SUPERADMIN") role = UserRole::SUPERADMIN;
+            else if (role_str == "ADMIN") role = UserRole::ADMIN;
+            else if (role_str == "USER") role = UserRole::USER;
+            else if (role_str == "READONLY") role = UserRole::READONLY;
+            else if (role_str == "DENIED") role = UserRole::DENIED;
+            else role = UserRole::DENIED;
+
+            if (!users_cache_.count(username)) {
+                UserInfo info;
+                info.username = username;
+                info.password_hash = password_hash;
+                users_cache_[username] = info;
+            }
+            users_cache_[username].db_roles[db] = role;
         }
     }
 
@@ -123,111 +134,164 @@ namespace francodb {
 
         // Insert all cached users
         for (const auto& [username, user] : users_cache_) {
-            std::string role_str;
-            switch (user.role) {
-                case UserRole::ADMIN: role_str = "ADMIN"; break;
-                case UserRole::USER: role_str = "USER"; break;
-                case UserRole::READONLY: role_str = "READONLY"; break;
-            }
+            for (const auto& [db, role] : user.db_roles) {
+                std::string role_str;
+                switch (role) {
+                    case UserRole::SUPERADMIN: role_str = "SUPERADMIN"; break;
+                    case UserRole::ADMIN: role_str = "ADMIN"; break;
+                    case UserRole::USER: role_str = "USER"; break;
+                    case UserRole::READONLY: role_str = "READONLY"; break;
+                    case UserRole::DENIED: role_str = "DENIED"; break;
+                }
 
-            std::string insert_sql = "EMLA GOWA franco_users ELKEYAM ('" + 
-                                    user.username + "', '" + 
+                std::string insert_sql = "EMLA GOWA franco_users ELKEYAM ('" + 
+                                    username + "', '" + 
                                     user.password_hash + "', '" + 
+                                    db + "', '" + 
                                     role_str + "');";
-            
-            Lexer lexer(insert_sql);
-            Parser parser(std::move(lexer));
-            auto stmt = parser.ParseQuery();
-            if (stmt) {
-                system_engine_->Execute(stmt.get());
+                
+                Lexer lexer(insert_sql);
+                Parser parser(std::move(lexer));
+                auto stmt = parser.ParseQuery();
+                if (stmt) {
+                    system_engine_->Execute(stmt.get());
+                }
             }
         }
     }
 
+    // Helper: check if user is root/superadmin (maayn)
+    static bool IsRoot(const std::string& username) {
+        return username == net::DEFAULT_ADMIN_USERNAME; // "maayn"
+    }
+
+    // Updated Authenticate: only checks password
     bool AuthManager::Authenticate(const std::string& username, const std::string& password, UserRole& out_role) {
-        LoadUsers(); // Refresh cache
-        
+        // Check if root user first (before loading users)
+        if (IsRoot(username)) {
+            std::string input_hash = HashPassword(password);
+            std::string expected_hash = HashPassword(net::DEFAULT_ADMIN_PASSWORD);
+            if (input_hash == expected_hash) {
+                out_role = UserRole::SUPERADMIN; // Root is always SUPERADMIN
+                return true;
+            }
+            return false;
+        }
+        LoadUsers();
         auto it = users_cache_.find(username);
-        if (it == users_cache_.end()) {
-            return false;
-        }
-
+        if (it == users_cache_.end()) return false;
         std::string input_hash = HashPassword(password);
-        if (input_hash != it->second.password_hash) {
-            return false;
-        }
-
-        out_role = it->second.role;
+        if (input_hash != it->second.password_hash) return false;
+        out_role = UserRole::READONLY; // role is per-db, so default here
         return true;
     }
 
+    // Check if user is SUPERADMIN
+    bool AuthManager::IsSuperAdmin(const std::string& username) {
+        if (IsRoot(username)) return true; // maayn is always SUPERADMIN
+        LoadUsers();
+        auto it = users_cache_.find(username);
+        if (it == users_cache_.end()) return false;
+        // Check if user has SUPERADMIN role in any database
+        for (const auto& [db, role] : it->second.db_roles) {
+            if (role == UserRole::SUPERADMIN) return true;
+        }
+        return false;
+    }
+
+    // Per-db role getter
+    UserRole AuthManager::GetUserRole(const std::string& username, const std::string& db_name) {
+        if (IsSuperAdmin(username)) return UserRole::SUPERADMIN; // SUPERADMIN has SUPERADMIN role in all databases
+        LoadUsers();
+        auto it = users_cache_.find(username);
+        if (it == users_cache_.end()) return UserRole::DENIED;
+        auto role_it = it->second.db_roles.find(db_name);
+        if (role_it == it->second.db_roles.end()) return UserRole::DENIED;
+        return role_it->second;
+    }
+
+    // Per-db role setter
+    bool AuthManager::SetUserRole(const std::string& username, const std::string& db_name, UserRole role) {
+        if (IsRoot(username)) return false; // maayn (superadmin) cannot be changed
+        LoadUsers();
+        auto it = users_cache_.find(username);
+        if (it == users_cache_.end()) {
+            // User doesn't exist in cache, create entry
+            UserInfo new_user;
+            new_user.username = username;
+            new_user.password_hash = ""; // Will be set when user is created
+            users_cache_[username] = new_user;
+            it = users_cache_.find(username);
+        }
+        it->second.db_roles[db_name] = role;
+        SaveUsers();
+        return true;
+    }
+
+    // CreateUser: set default role for 'default' db
     bool AuthManager::CreateUser(const std::string& username, const std::string& password, UserRole role) {
         LoadUsers();
-        
-        if (users_cache_.find(username) != users_cache_.end()) {
-            return false; // User already exists
-        }
-
+        if (users_cache_.find(username) != users_cache_.end()) return false;
         UserInfo new_user;
         new_user.username = username;
         new_user.password_hash = HashPassword(password);
-        new_user.role = role;
-
+        new_user.db_roles["default"] = role;
         users_cache_[username] = new_user;
         SaveUsers();
         return true;
     }
 
-    bool AuthManager::DeleteUser(const std::string& username) {
-        LoadUsers();
-        
-        if (users_cache_.find(username) == users_cache_.end()) {
-            return false;
-        }
-
-        users_cache_.erase(username);
-        SaveUsers();
-        return true;
-    }
-
-    UserRole AuthManager::GetUserRole(const std::string& username) {
-        LoadUsers();
-        auto it = users_cache_.find(username);
-        if (it == users_cache_.end()) {
-            return UserRole::READONLY; // Default to readonly if not found
-        }
-        return it->second.role;
-    }
-
+    // GetAllUsers: return all users from cache
     std::vector<UserInfo> AuthManager::GetAllUsers() {
         LoadUsers();
-        std::vector<UserInfo> users;
-        users.reserve(users_cache_.size());
-        for (const auto &pair : users_cache_) {
-            users.push_back(pair.second);
+        std::vector<UserInfo> result;
+        for (const auto& [username, user] : users_cache_) {
+            result.push_back(user);
         }
-        return users;
+        return result;
     }
 
-    bool AuthManager::SetUserRole(const std::string& username, UserRole new_role) {
+    // DeleteUser: remove user from system
+    bool AuthManager::DeleteUser(const std::string& username) {
+        if (IsRoot(username)) return false; // Cannot delete root/superadmin
         LoadUsers();
         auto it = users_cache_.find(username);
-        if (it == users_cache_.end()) {
-            return false; // User not found
-        }
-        it->second.role = new_role;
+        if (it == users_cache_.end()) return false;
+        users_cache_.erase(it);
         SaveUsers();
         return true;
     }
 
-    bool AuthManager::HasPermission(UserRole role, StatementType stmt_type) {
-        switch (role) {
-            case UserRole::ADMIN:
-                // Admin can do everything
-                return true;
+    // SetUserRole: set role for current/default database (single parameter version)
+    bool AuthManager::SetUserRole(const std::string& username, UserRole new_role) {
+        if (IsRoot(username)) return false; // Cannot change root
+        LoadUsers();
+        auto it = users_cache_.find(username);
+        if (it == users_cache_.end()) return false;
+        // Set role for "default" database
+        it->second.db_roles["default"] = new_role;
+        SaveUsers();
+        return true;
+    }
 
+    // GetUserRole: get role for default database (single parameter version)
+    UserRole AuthManager::GetUserRole(const std::string& username) {
+        return GetUserRole(username, "default");
+    }
+
+    // Check if user has access to a database (SUPERADMIN always has access)
+    bool AuthManager::HasDatabaseAccess(const std::string& username, const std::string& db_name) {
+        if (IsSuperAdmin(username)) return true; // SUPERADMIN has access to all databases
+        UserRole role = GetUserRole(username, db_name);
+        return role != UserRole::DENIED;
+    }
+
+    // HasPermission: deny all for DENIED, always allow for SUPERADMIN and ADMIN
+    bool AuthManager::HasPermission(UserRole role, StatementType stmt_type) {
+        if (role == UserRole::DENIED) return false;
+        if (role == UserRole::SUPERADMIN || role == UserRole::ADMIN) return true;
+        switch (role) {
             case UserRole::USER:
-                // User can SELECT, INSERT, UPDATE, but not DROP, CREATE_DB, CREATE
                 switch (stmt_type) {
                     case StatementType::SELECT:
                     case StatementType::INSERT:
@@ -245,11 +309,8 @@ namespace francodb {
                     default:
                         return false;
                 }
-
             case UserRole::READONLY:
-                // Readonly can only SELECT
                 return (stmt_type == StatementType::SELECT);
-
             default:
                 return false;
         }

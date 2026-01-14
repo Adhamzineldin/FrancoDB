@@ -110,14 +110,36 @@ bool DeleteExecutor::EvaluatePredicate(const Tuple &tuple) {
         const auto &cond = plan_->where_clause_[i];
         
         Value tuple_val = tuple.GetValue(table_info_->schema_, table_info_->schema_.GetColIdx(cond.column));
-        bool match = (tuple_val.GetAsString() == cond.value.GetAsString());
+        bool match = false;
         
-        // Type-specific comparison override
-        if (tuple_val.GetTypeId() == TypeId::INTEGER) {
-            match = (tuple_val.GetAsInteger() == cond.value.GetAsInteger());
-        } else if (tuple_val.GetTypeId() == TypeId::DECIMAL) {
-             // Simple float comparison
-             match = (std::abs(tuple_val.GetAsDouble() - cond.value.GetAsDouble()) < 0.0001);
+        // Handle IN operator
+        if (cond.op == "IN") {
+            for (const auto& in_val : cond.in_values) {
+                if (tuple_val.GetTypeId() == TypeId::INTEGER) {
+                    if (tuple_val.GetAsInteger() == in_val.GetAsInteger()) {
+                        match = true;
+                        break;
+                    }
+                } else if (tuple_val.GetTypeId() == TypeId::DECIMAL) {
+                    if (std::abs(tuple_val.GetAsDouble() - in_val.GetAsDouble()) < 0.0001) {
+                        match = true;
+                        break;
+                    }
+                } else {
+                    if (tuple_val.GetAsString() == in_val.GetAsString()) {
+                        match = true;
+                        break;
+                    }
+                }
+            }
+        } else if (cond.op == "=") {
+            match = (tuple_val.GetAsString() == cond.value.GetAsString());
+            // Type-specific comparison override
+            if (tuple_val.GetTypeId() == TypeId::INTEGER) {
+                match = (tuple_val.GetAsInteger() == cond.value.GetAsInteger());
+            } else if (tuple_val.GetTypeId() == TypeId::DECIMAL) {
+                match = (std::abs(tuple_val.GetAsDouble() - cond.value.GetAsDouble()) < 0.0001);
+            }
         }
 
         if (i == 0) result = match;

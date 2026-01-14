@@ -18,6 +18,7 @@ namespace francodb {
         Transaction* GetCurrentTransaction();
         Transaction* GetCurrentTransactionForWrite();
         void AutoCommitIfNeeded();
+        Catalog* GetCatalog() { return catalog_; }
 
         // CHANGE: Returns Result Object instead of printing
         ExecutionResult Execute(Statement *stmt);

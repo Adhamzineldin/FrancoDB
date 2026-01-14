@@ -28,6 +28,7 @@ namespace francodb {
         void SaveCatalog();
         void LoadCatalog();
         IndexInfo *GetIndex(const std::string &index_name);
+        std::vector<std::string> GetAllTableNames();
 
     private:
         BufferPoolManager *bpm_;

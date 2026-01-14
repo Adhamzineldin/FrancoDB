@@ -63,7 +63,11 @@ int main(int argc, char* argv[]) {
         std::string password;
         std::cout << "\nConnection string (or press Enter for manual): ";
         std::string conn_input;
-        std::getline(std::cin, conn_input);
+        if (!std::getline(std::cin, conn_input)) {
+            // Handle EOF/Ctrl+C gracefully
+            std::cerr << "\n[INFO] Connection cancelled." << std::endl;
+            return 0;
+        }
         
         // Trim whitespace
         while (!conn_input.empty() && (conn_input.front() == ' ' || conn_input.front() == '\t')) {
@@ -100,24 +104,47 @@ int main(int argc, char* argv[]) {
                 db_start + 1 < conn_input.length()) {
                 current_db = conn_input.substr(db_start + 1);
             }
-        } else {
+        } else if (!conn_input.empty()) {
             // Manual credentials
             std::cout << "Username: ";
-            std::getline(std::cin, username);
+            if (!std::getline(std::cin, username)) {
+                std::cerr << "\n[INFO] Connection cancelled." << std::endl;
+                return 0;
+            }
             std::cout << "Password: ";
-            std::getline(std::cin, password);
+            if (!std::getline(std::cin, password)) {
+                std::cerr << "\n[INFO] Connection cancelled." << std::endl;
+                return 0;
+            }
             
             if (!db_client.Connect(net::DEFAULT_SERVER_IP, net::DEFAULT_PORT, username, password)) {
                 std::cerr << "[FATAL] Could not connect/authenticate to FrancoDB server." << std::endl;
                 return 1;
             }
+        } else {
+            // Empty input - use defaults
+            std::cout << "Using default connection (maayn/root@localhost)..." << std::endl;
+            if (!db_client.Connect(net::DEFAULT_SERVER_IP, net::DEFAULT_PORT, net::DEFAULT_ADMIN_USERNAME, net::DEFAULT_ADMIN_PASSWORD)) {
+                std::cerr << "[FATAL] Could not connect/authenticate to FrancoDB server." << std::endl;
+                return 1;
+            }
+            username = net::DEFAULT_ADMIN_USERNAME;
         }
     }
 
     std::string input;
     while (true) {
         std::cout << username << "@" << current_db << "> ";
-        if (!std::getline(std::cin, input) || input == "exit") break;
+        std::cout.flush(); // Ensure prompt is displayed
+        if (!std::getline(std::cin, input)) {
+            // Handle EOF/Ctrl+C gracefully
+            std::cout << "\nGoodbye!" << std::endl;
+            break;
+        }
+        if (input == "exit" || input == "quit") {
+            std::cout << "Goodbye!" << std::endl;
+            break;
+        }
         if (input.empty()) continue;
 
         // Track USE <db>;

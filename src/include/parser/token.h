@@ -35,18 +35,22 @@ namespace francodb {
         DECIMAL_TYPE,    // KASR
         INDEX, // FEHRIS
         PRIMARY_KEY, // RAKAM ASASI or MOFTA7 ASASI
+        DECIMAL_LITERAL,
+        TRUE_LIT,    // AH
+        FALSE_LIT,   // LA
+        
+        
         BEGIN_TXN, // 2EBDA2
         ROLLBACK, // 2ERGA3
         COMMIT, // 2AKED
     
-        DECIMAL_LITERAL,
-        TRUE_LIT,    // AH
-        FALSE_LIT,   // LA
+        
     
         // LOGICAL OPERATORS
         AND,         // WE
         OR,          // AW
         ON,     // 3ALA
+        IN_OP,       // FE (IN) - renamed from IN because IN is reserved in C++
         
         
         // Literals & Symbols

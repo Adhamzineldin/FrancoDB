@@ -12,15 +12,18 @@ namespace francodb {
 
     // RBAC Roles
     enum class UserRole {
+        SUPERADMIN, // Full access to everything (like root) - can manage users, databases, all operations
         ADMIN,      // Full access: CREATE, INSERT, SELECT, UPDATE, DELETE, DROP, CREATE_DB
         USER,       // Limited: SELECT, INSERT, UPDATE (no DROP, CREATE_DB)
-        READONLY    // SELECT only
+        READONLY,   // SELECT only
+        DENIED      // No access to the database
     };
 
     struct UserInfo {
         std::string username;
         std::string password_hash;  // Simple hash for now (in production use bcrypt/argon2)
-        UserRole role;
+        // Per-database roles: db_name -> role
+        std::unordered_map<std::string, UserRole> db_roles;
     };
 
     /**
@@ -43,10 +46,19 @@ namespace francodb {
         bool DeleteUser(const std::string& username);
         bool SetUserRole(const std::string& username, UserRole new_role);
         UserRole GetUserRole(const std::string& username);
+        // Per-database role management
+        UserRole GetUserRole(const std::string& username, const std::string& db_name);
+        bool SetUserRole(const std::string& username, const std::string& db_name, UserRole role);
         std::vector<UserInfo> GetAllUsers();
 
         // Permission Checking (RBAC)
         bool HasPermission(UserRole role, StatementType stmt_type);
+        
+        // Check if user has access to a database (SUPERADMIN always has access)
+        bool HasDatabaseAccess(const std::string& username, const std::string& db_name);
+        
+        // Check if user is SUPERADMIN
+        bool IsSuperAdmin(const std::string& username);
 
     private:
         // Simple hash function (for demo - use proper crypto in production)
