@@ -14,13 +14,17 @@ typedef int socket_t;
 #endif
 
 #include "network/franco_client.h"
+#include "network/protocol.h"
+#include "common/franco_net_config.h"
 
 #include <cstring>
 #include <iostream>
 
 namespace francodb {
 
-    FrancoClient::FrancoClient() {
+    FrancoClient::FrancoClient(ProtocolType protocol)
+        : protocol_(std::unique_ptr<ProtocolSerializer>(CreateProtocol(protocol))),
+          protocol_type_(protocol) {
 #ifdef _WIN32
         WSADATA wsaData;
         WSAStartup(MAKEWORD(2, 2), &wsaData);

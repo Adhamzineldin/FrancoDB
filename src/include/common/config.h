@@ -9,12 +9,14 @@ namespace francodb {
     using frame_id_t = int32_t;
 
 
-    /**
-     * PAGE_SIZE: The size of a database page.
-     * 4KB is standard because it matches the default OS page size and disk sector size.
-     * This minimizes "torn writes" (where half a page is written before a crash).
-     */
+    // --- Storage Layout ---
+    // 4KB page size matches typical OS page size
     static constexpr uint32_t PAGE_SIZE = 4096;
+
+    // --- Buffer Pool ---
+    // Default number of pages the BufferPoolManager can hold in memory.
+    // Used by the server main.
+    static constexpr uint32_t BUFFER_POOL_SIZE = 100;
 
     /**
      * INVALID_PAGE_ID: Represents a null pointer for pages.

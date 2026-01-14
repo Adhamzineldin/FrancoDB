@@ -1,28 +1,31 @@
-// Platform networking headers MUST come before any header that may include <windows.h>
+// network/franco_server.cpp (updated)
+// Platform networking headers
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
 typedef SOCKET socket_t;
+#define INVALID_SOCK INVALID_SOCKET
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 typedef int socket_t;
-#define INVALID_SOCKET -1
+#define INVALID_SOCK -1
 #endif
 
 #include "network/franco_server.h"
-#include "common/result_formatter.h"
+#include "network/protocol.h"
 #include "parser/lexer.h"
 #include "parser/parser.h"
 
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <string>
 
 namespace francodb {
-    FrancoServer::FrancoServer(BufferPoolManager *bpm, Catalog *catalog)
+    FrancoServer::FrancoServer(BufferPoolManager* bpm, Catalog* catalog)
         : bpm_(bpm), catalog_(catalog) {
 #ifdef _WIN32
         WSADATA wsa;
@@ -32,27 +35,38 @@ namespace francodb {
 
     FrancoServer::~FrancoServer() {
         Shutdown();
+#ifdef _WIN32
+        WSACleanup();
+#endif
     }
 
     void FrancoServer::Start(int port) {
         socket_t s = socket(AF_INET, SOCK_STREAM, 0);
-        if (s == (socket_t) INVALID_SOCKET) return;
+        if (s == INVALID_SOCK) {
+            std::cerr << "[ERROR] Failed to create socket" << std::endl;
+            return;
+        }
 
         int opt = 1;
-        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *) &opt, sizeof(opt));
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = htons(port);
 
-        if (bind(s, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+        if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
             std::cerr << "[ERROR] Server Bind Failed on port " << port << std::endl;
+#ifdef _WIN32
+            closesocket(s);
+#else
+            close(s);
+#endif
             return;
         }
 
         listen(s, net::BACKLOG_QUEUE);
-        listen_sock_ = (uintptr_t) s;
+        listen_sock_ = (uintptr_t)s;
         running_ = true;
 
         std::cout << "[READY] FrancoDB Server listening on port " << port << "..." << std::endl;
@@ -64,63 +78,117 @@ namespace francodb {
 #else
             socklen_t len = sizeof(client_addr);
 #endif
-            socket_t client_sock = accept((socket_t) listen_sock_, (struct sockaddr *) &client_addr, &len);
+            socket_t client_sock = accept((socket_t)listen_sock_, (struct sockaddr*)&client_addr, &len);
 
-            if (client_sock != (socket_t) INVALID_SOCKET) {
-                std::thread(&FrancoServer::HandleClient, this, (uintptr_t) client_sock).detach();
+            if (client_sock != INVALID_SOCK) {
+                uintptr_t client_id = (uintptr_t)client_sock;
+                client_threads_[client_id] = std::thread(&FrancoServer::HandleClient, this, client_id);
+                client_threads_[client_id].detach();
             }
         }
+
+#ifdef _WIN32
+        closesocket((socket_t)listen_sock_);
+#else
+        close((socket_t)listen_sock_);
+#endif
+    }
+
+    void FrancoServer::Shutdown() {
+        running_ = false;
+        if (listen_sock_ != 0) {
+#ifdef _WIN32
+            closesocket((socket_t)listen_sock_);
+#else
+            close((socket_t)listen_sock_);
+#endif
+            listen_sock_ = 0;
+        }
+        // Wait for client threads to finish
+        for (auto& [id, thread] : client_threads_) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        client_threads_.clear();
+    }
+
+    ProtocolType FrancoServer::DetectProtocol(const std::string& initial_data) {
+        if (initial_data.empty()) return ProtocolType::TEXT;
+        
+        if (initial_data[0] == '{' || initial_data.substr(0, 4) == "POST") {
+            return ProtocolType::JSON;
+        } else if (initial_data[0] == 0x01 || initial_data[0] == 0x02) {
+            return ProtocolType::BINARY;
+        }
+        
+        return ProtocolType::TEXT;
     }
 
     void FrancoServer::HandleClient(uintptr_t client_socket) {
-        socket_t sock = (socket_t) client_socket;
-        ExecutionEngine engine(bpm_, catalog_);
+        socket_t sock = (socket_t)client_socket;
         char buffer[net::MAX_PACKET_SIZE];
-
+        
+        // Read initial bytes to detect protocol
+        memset(buffer, 0, net::MAX_PACKET_SIZE);
+        int peek_bytes = recv(sock, buffer, 4, MSG_PEEK);
+        
+        ProtocolType protocol_type = ProtocolType::TEXT; // Default
+        if (peek_bytes >= 2) {
+            // Simple detection logic
+            if (buffer[0] == '{' || strncmp(buffer, "POST", 4) == 0) {
+                protocol_type = ProtocolType::JSON;
+            } else if (buffer[0] == 0x01 || buffer[0] == 0x02) { // Binary markers
+                protocol_type = ProtocolType::BINARY;
+            }
+        }
+        
+        // Create appropriate handler
+        auto handler = CreateHandler(protocol_type, client_socket);
+        
         while (running_) {
             memset(buffer, 0, net::MAX_PACKET_SIZE);
             int bytes = recv(sock, buffer, net::MAX_PACKET_SIZE - 1, 0);
             if (bytes <= 0) break;
 
-            std::string sql(buffer);
-            // Basic cleanup
-            sql.erase(std::remove(sql.begin(), sql.end(), '\n'), sql.end());
-            sql.erase(std::remove(sql.begin(), sql.end(), '\r'), sql.end());
+            std::string request(buffer, bytes);
 
-            if (sql == "exit" || sql == "quit") break;
+            // Normalize simple text exit/quit for text clients
+            std::string trimmed = request;
+            trimmed.erase(std::remove(trimmed.begin(), trimmed.end(), '\n'), trimmed.end());
+            trimmed.erase(std::remove(trimmed.begin(), trimmed.end(), '\r'), trimmed.end());
 
-            try {
-                Lexer lexer(sql);
-                Parser parser(std::move(lexer));
-                auto stmt = parser.ParseQuery();
-
-                if (stmt) {
-                    ExecutionResult res = engine.Execute(stmt.get());
-                    std::string response;
-
-                    if (!res.success) {
-                        response = "ERROR: " + res.message + "\n";
-                    } else if (res.result_set) {
-                        response = ResultFormatter::Format(res.result_set);
-                    } else {
-                        response = res.message + "\n";
-                    }
-                    send(sock, response.c_str(), response.size(), 0);
-                }
-            } catch (const std::exception &e) {
-                std::string err = "SYSTEM ERROR: " + std::string(e.what()) + "\n";
-                send(sock, err.c_str(), err.size(), 0);
+            if (trimmed == "exit" || trimmed == "quit") {
+                std::string goodbye = "Goodbye!\n";
+                send(sock, goodbye.c_str(), goodbye.size(), 0);
+                break;
             }
+
+            std::string response = handler->ProcessRequest(request);
+            send(sock, response.c_str(), response.size(), 0);
         }
+        
+        // Cleanup
 #ifdef _WIN32
         closesocket(sock);
 #else
         close(sock);
 #endif
     }
-
-    void FrancoServer::Shutdown() {
-        running_ = false;
-        // Closing listen_sock_ would be done here...
+    
+    std::unique_ptr<ConnectionHandler> FrancoServer::CreateHandler(
+        ProtocolType type, uintptr_t client_socket) {
+        
+        auto engine = std::make_unique<ExecutionEngine>(bpm_, catalog_);
+        
+        switch (type) {
+            case ProtocolType::JSON:
+                return std::make_unique<ApiConnectionHandler>(engine.release());
+            case ProtocolType::BINARY:
+                return std::make_unique<BinaryConnectionHandler>(engine.release());
+            case ProtocolType::TEXT:
+            default:
+                return std::make_unique<ClientConnectionHandler>(engine.release());
+        }
     }
-} // namespace francodb
+}
