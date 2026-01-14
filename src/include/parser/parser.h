@@ -8,17 +8,11 @@ namespace francodb {
 
     class Parser {
     public:
-        explicit Parser(Lexer lexer) : lexer_(std::move(lexer)) {
-            // Prepare the first token
-            current_token_ = lexer_.NextToken();
-        }
-
-        // The main entry point
+        explicit Parser(Lexer lexer);
         std::unique_ptr<Statement> ParseQuery();
 
     private:
-        // --- Basic Navigation ---
-        void Advance() { current_token_ = lexer_.NextToken(); }
+        void Advance();
     
         // Returns true and advances if current_token matches type, else returns false
         bool Match(TokenType type); 

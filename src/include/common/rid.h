@@ -10,32 +10,13 @@ namespace francodb {
 
     class RID {
     public:
-        // Default constructor (Invalid RID)
-        RID() : page_id_(INVALID_PAGE_ID), slot_num_(-1) {}
-
-        // Constructor with values
-        RID(page_id_t page_id, uint32_t slot_num) 
-            : page_id_(page_id), slot_num_(slot_num) {}
-
+        RID();
+        RID(page_id_t page_id, uint32_t slot_num);
         page_id_t GetPageId() const { return page_id_; }
         uint32_t GetSlotId() const { return slot_num_; }
-
-        void Set(page_id_t page_id, uint32_t slot_num) {
-            page_id_ = page_id;
-            slot_num_ = slot_num;
-        }
-
-        // Overload equality operator so we can compare RIDs
-        bool operator==(const RID &other) const {
-            return page_id_ == other.page_id_ && slot_num_ == other.slot_num_;
-        }
-    
-        // For debugging
-        std::string ToString() const {
-            std::stringstream os;
-            os << "RID(" << page_id_ << ", " << slot_num_ << ")";
-            return os.str();
-        }
+        void Set(page_id_t page_id, uint32_t slot_num);
+        bool operator==(const RID &other) const;
+        std::string ToString() const;
 
     private:
         page_id_t page_id_;
