@@ -50,9 +50,24 @@ Name: "{group}\FrancoDB Configuration"; Filename: "notepad.exe"; Parameters: """
 Name: "{group}\Uninstall FrancoDB"; Filename: "{uninstallexe}"
 
 [Registry]
+; 1. Existing System Path Update (Keep this!)
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; \
     ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}\bin"; \
     Check: NeedsAddPath(ExpandConstant('{app}\bin'))
+
+; ==============================================================================
+; 2. URL PROTOCOL HANDLER (maayn://)
+; ==============================================================================
+; This registers the protocol so Windows knows "maayn://" opens FrancoDB Shell
+Root: HKCR; Subkey: "maayn"; ValueType: string; ValueName: ""; ValueData: "URL:FrancoDB Protocol"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "maayn"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletekey
+
+; Set the Icon for the protocol (uses the shell exe icon)
+Root: HKCR; Subkey: "maayn\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\francodb_shell.exe,0"; Flags: uninsdeletekey
+
+; Define the command to run when a link is clicked
+; We wrap %1 in quotes to handle spaces in URLs
+Root: HKCR; Subkey: "maayn\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\francodb_shell.exe"" ""%1"""; Flags: uninsdeletekey
 
 [UninstallRun]
 Filename: "sc.exe"; Parameters: "stop FrancoDBService"; Flags: runhidden; RunOnceId: "StopService"
@@ -184,23 +199,40 @@ var
   ConfigContent, SummaryText: String;
   EncEnabled: Boolean;
   ResultCode, I: Integer;
-  ServicePath, DataDir: String;
+  ServicePath, DataDir, LogDir: String; // Added LogDir variable
 begin
+  // 1. CLEANUP OLD SERVICE & FILES
   if CurStep = ssInstall then
   begin
     Exec('sc.exe', 'stop FrancoDBService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(200);
-    // FORCE KILL
+    
+    // Force Kill processes
     Exec('taskkill.exe', '/F /IM francodb_server.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('taskkill.exe', '/F /IM francodb_shell.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('taskkill.exe', '/F /IM francodb_service.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    
     Sleep(500);
     Exec('sc.exe', 'delete FrancoDBService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+    // --- NEW: WIPE OLD LOGS ---
+    // DelTree(Path, IsDir, DeleteFiles, DeleteSubdirs)
+    DelTree(ExpandConstant('{app}\log'), True, True, True);
   end;
 
+  // 2. CONFIGURATION & PERMISSIONS
   if CurStep = ssPostInstall then
   begin
     DataDir := ExpandConstant('{app}\data');
+    LogDir  := ExpandConstant('{app}\log');
+
+    // ==============================================================================
+    // PERMISSION FIX (THE "NUCLEAR OPTION")
+    // ==============================================================================
+    // Grant Modify (M) permission to Users for Data AND Log folders recursively (/T)
+    Exec('icacls', '"' + DataDir + '" /grant Users:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('icacls', '"' + LogDir + '" /grant Users:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    // ==============================================================================
 
     if not IsUpgrade then
     begin
@@ -218,6 +250,7 @@ begin
        SaveStringToFile(ExpandConstant('{app}\bin\francodb.conf'), ConfigContent, False);
     end;
 
+    // 3. SERVICE INSTALLATION
     ServicePath := ExpandConstant('{app}\bin\francodb_service.exe');
     ServiceInstalled := False;
     ServiceRebootRequired := False;
@@ -265,6 +298,7 @@ begin
        ServiceStartResult := -1; 
     end;
 
+    // 4. SUMMARY REPORT
     SummaryText := 'STATUS REPORT' + #13#10 + '------------------------------------------------------------' + #13#10;
     
     if ServiceRebootRequired then

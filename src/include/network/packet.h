@@ -15,7 +15,7 @@ namespace francodb {
 #pragma pack(push, 1) // Ensure no padding bytes
     struct PacketHeader {
         MsgType type;     // 1 byte
-        uint64_t length;  // 4 bytes (size of the payload only)
+        uint32_t length;  // 4 bytes (size of the payload only)
     };
 #pragma pack(pop)
 

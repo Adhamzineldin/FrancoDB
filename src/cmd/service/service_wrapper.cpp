@@ -1,4 +1,3 @@
-// service_wrapper.cpp - Fixes Windows GUI Hangs on Stop/Restart
 #include <windows.h>
 #include <tchar.h>
 #include <iostream>
@@ -7,6 +6,8 @@
 #include <atomic>
 #include <string>
 #include <vector>
+#include <fstream>
+#include <chrono>
 
 static TCHAR g_ServiceName[] = TEXT("FrancoDBService");
 SERVICE_STATUS g_ServiceStatus;
@@ -16,7 +17,14 @@ PROCESS_INFORMATION g_ServerProcess = {0};
 std::atomic<bool> g_Running(false);
 std::thread g_WorkerThread;
 
-// Update Windows on our status so the GUI doesn't hang
+void LogDebug(const std::string& msg) {
+    std::ofstream log("C:\\francodb_service_debug.txt", std::ios::app);
+    if (log.is_open()) {
+        auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        log << std::ctime(&now) << " - " << msg << "\n";
+    }
+}
+
 void ReportStatus(DWORD currentState, DWORD win32ExitCode, DWORD waitHint) {
     static DWORD checkPoint = 1;
     g_ServiceStatus.dwCurrentState = currentState;
@@ -36,7 +44,6 @@ void ReportStatus(DWORD currentState, DWORD win32ExitCode, DWORD waitHint) {
     SetServiceStatus(g_StatusHandle, &g_ServiceStatus);
 }
 
-// Get the directory where this executable lives
 std::string GetExeDir() {
     TCHAR buffer[MAX_PATH];
     GetModuleFileName(NULL, buffer, MAX_PATH);
@@ -47,51 +54,47 @@ bool StartServerProcess() {
     std::filesystem::path binDir = GetExeDir();
     std::filesystem::path serverExe = binDir / "francodb_server.exe";
 
-    if (!std::filesystem::exists(serverExe)) return false;
+    if (!std::filesystem::exists(serverExe)) {
+        LogDebug("CRITICAL: Server EXE not found at " + serverExe.string());
+        return false;
+    }
 
     STARTUPINFOW si;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE; // Run hidden
+    si.wShowWindow = SW_HIDE; 
 
     ZeroMemory(&g_ServerProcess, sizeof(g_ServerProcess));
 
-    std::wstring cmdLine = L"\"" + serverExe.wstring() + L"\"";
+    // FIX: Pass --service flag
+    std::wstring cmdLine = L"\"" + serverExe.wstring() + L"\" --service";
     std::vector<wchar_t> cmdLineBuffer(cmdLine.begin(), cmdLine.end());
     cmdLineBuffer.push_back(0);
 
-    return CreateProcessW(NULL, cmdLineBuffer.data(), NULL, NULL, FALSE, 
+    LogDebug("Attempting to start process...");
+    
+    BOOL success = CreateProcessW(NULL, cmdLineBuffer.data(), NULL, NULL, FALSE, 
         CREATE_NO_WINDOW, NULL, binDir.wstring().c_str(), &si, &g_ServerProcess);
+        
+    if (!success) {
+        LogDebug("CreateProcess failed. Error: " + std::to_string(GetLastError()));
+    }
+    return success;
 }
 
 void StopServerProcess() {
     if (g_ServerProcess.hProcess == NULL) return;
-
-    // 1. Try Graceful Shutdown (Ctrl+C)
-    if (AttachConsole(g_ServerProcess.dwProcessId)) {
-        SetConsoleCtrlHandler(NULL, TRUE);
-        GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-        FreeConsole();
-        
-        // Wait 3 seconds for it to save data and close
-        if (WaitForSingleObject(g_ServerProcess.hProcess, 3000) == WAIT_OBJECT_0) {
-            CloseHandle(g_ServerProcess.hProcess);
-            CloseHandle(g_ServerProcess.hThread);
-            g_ServerProcess.hProcess = NULL;
-            return;
-        }
-    }
-
-    // 2. Force Kill if it's stuck (Prevents Service Hang)
     TerminateProcess(g_ServerProcess.hProcess, 1);
     CloseHandle(g_ServerProcess.hProcess);
     CloseHandle(g_ServerProcess.hThread);
     g_ServerProcess.hProcess = NULL;
 }
 
-// The loop that monitors the server
 void WorkerThread() {
+    int crash_count = 0;
+    auto last_crash_time = std::chrono::steady_clock::now();
+
     if (!StartServerProcess()) {
         g_Running = false;
         SetEvent(g_ServiceStopEvent);
@@ -99,18 +102,41 @@ void WorkerThread() {
     }
 
     while (g_Running) {
-        // Check if server process is still alive every 500ms
         DWORD waitResult = WaitForSingleObject(g_ServerProcess.hProcess, 500);
         
         if (waitResult == WAIT_OBJECT_0) {
-            // Server crashed or exited
+            DWORD exitCode = 0;
+            GetExitCodeProcess(g_ServerProcess.hProcess, &exitCode);
+            
+            LogDebug("Server exited with code: " + std::to_string(exitCode));
+
+            if (exitCode == 3221225781) { 
+                LogDebug("FATAL: Missing DLLs. Stopping Service.");
+                g_Running = false;
+                SetEvent(g_ServiceStopEvent);
+                return;
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_crash_time).count();
+            
+            if (duration < 10) crash_count++; else crash_count = 1;
+            last_crash_time = now;
+
+            if (crash_count > 3) {
+                LogDebug("CIRCUIT BREAKER TRIPPED. Giving up.");
+                g_Running = false;
+                SetEvent(g_ServiceStopEvent);
+                return;
+            }
+
+            CloseHandle(g_ServerProcess.hProcess);
+            CloseHandle(g_ServerProcess.hThread);
+            ZeroMemory(&g_ServerProcess, sizeof(g_ServerProcess));
+            Sleep(2000); 
+            
             if (g_Running) {
-                // Restart logic
-                CloseHandle(g_ServerProcess.hProcess);
-                CloseHandle(g_ServerProcess.hThread);
-                ZeroMemory(&g_ServerProcess, sizeof(g_ServerProcess));
-                
-                Sleep(2000); 
+                LogDebug("Restarting server...");
                 if (!StartServerProcess()) {
                     g_Running = false;
                     SetEvent(g_ServiceStopEvent);
@@ -118,19 +144,15 @@ void WorkerThread() {
             }
         }
     }
-    
-    // Cleanup when loop exits
     StopServerProcess();
 }
 
-// Handles "Stop" and "Restart" clicks from Windows
 VOID WINAPI ServiceCtrlHandler(DWORD CtrlCode) {
     switch (CtrlCode) {
         case SERVICE_CONTROL_STOP:
         case SERVICE_CONTROL_SHUTDOWN:
             ReportStatus(SERVICE_STOP_PENDING, 0, 3000);
             g_Running = false;
-            // Signal the main thread to wake up
             SetEvent(g_ServiceStopEvent);
             break;
     }
@@ -141,7 +163,6 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     if (!g_StatusHandle) return;
 
     ReportStatus(SERVICE_START_PENDING, 0, 3000);
-
     g_ServiceStopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!g_ServiceStopEvent) {
         ReportStatus(SERVICE_STOPPED, GetLastError(), 0);
@@ -149,23 +170,18 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     }
 
     g_Running = true;
+    LogDebug("Service Starting...");
     g_WorkerThread = std::thread(WorkerThread);
 
-    // Report RUNNING immediately so Windows knows we started OK
     ReportStatus(SERVICE_RUNNING, 0, 0);
-
-    // Wait until we are told to stop
     WaitForSingleObject(g_ServiceStopEvent, INFINITE);
 
-    // STOPPING SEQUENCE
     ReportStatus(SERVICE_STOP_PENDING, 0, 5000);
-    
-    if (g_WorkerThread.joinable()) {
-        g_WorkerThread.join();
-    }
+    if (g_WorkerThread.joinable()) g_WorkerThread.join();
 
     CloseHandle(g_ServiceStopEvent);
     ReportStatus(SERVICE_STOPPED, 0, 0);
+    LogDebug("Service Stopped.");
 }
 
 int _tmain(int argc, TCHAR* argv[]) {
@@ -173,9 +189,6 @@ int _tmain(int argc, TCHAR* argv[]) {
         {g_ServiceName, (LPSERVICE_MAIN_FUNCTION)ServiceMain},
         {NULL, NULL}
     };
-
-    if (!StartServiceCtrlDispatcher(ServiceTable)) {
-        return 0; // Console mode check
-    }
+    if (!StartServiceCtrlDispatcher(ServiceTable)) return 0;
     return 0;
 }
