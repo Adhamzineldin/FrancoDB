@@ -26,7 +26,7 @@ namespace francodb {
     private:
         std::string ValueToString(const Value &v);
         
-        // Internal helpers now return ExecutionResult
+        // --- MAIN EXECUTORS ---
         ExecutionResult ExecuteCreate(CreateStatement *stmt);
         ExecutionResult ExecuteCreateIndex(CreateIndexStatement *stmt);
         ExecutionResult ExecuteInsert(InsertStatement *stmt);
@@ -34,9 +34,18 @@ namespace francodb {
         ExecutionResult ExecuteDrop(DropStatement *stmt);
         ExecutionResult ExecuteDelete(DeleteStatement *stmt);
         ExecutionResult ExecuteUpdate(UpdateStatement *stmt);
+    
+        // --- TRANSACTION EXECUTORS ---
         ExecutionResult ExecuteBegin();
         ExecutionResult ExecuteRollback();
         ExecutionResult ExecuteCommit();
+
+        // --- SYSTEM/METADATA EXECUTORS (THESE WERE MISSING) ---
+        ExecutionResult ExecuteShowDatabases(ShowDatabasesStatement *stmt);
+        ExecutionResult ExecuteShowTables(ShowTablesStatement *stmt);
+        ExecutionResult ExecuteShowUsers(ShowUsersStatement *stmt);
+        ExecutionResult ExecuteShowStatus(ShowStatusStatement *stmt);
+        ExecutionResult ExecuteWhoAmI(WhoAmIStatement *stmt);
 
         Catalog *catalog_;
         ExecutorContext *exec_ctx_;

@@ -1,25 +1,14 @@
 import socket
 import struct
-from typing import Optional, Tuple, Any, List
+from typing import Optional, Tuple, Any, List, Dict, Union
 
 # ==========================================
 # 1. CUSTOM EXCEPTIONS
 # ==========================================
-class FrancoDBError(Exception):
-    """Base exception for all FrancoDB errors."""
-    pass
-
-class OperationalError(FrancoDBError):
-    """Connection issues or server not found."""
-    pass
-
-class AuthError(FrancoDBError):
-    """Authentication failures."""
-    pass
-
-class QueryError(FrancoDBError):
-    """Syntax errors or execution errors from the DB."""
-    pass
+class FrancoDBError(Exception): pass
+class OperationalError(FrancoDBError): pass
+class AuthError(FrancoDBError): pass
+class QueryError(FrancoDBError): pass
 
 # ==========================================
 # 2. PROTOCOL CONSTANTS
@@ -27,151 +16,162 @@ class QueryError(FrancoDBError):
 CMD_TEXT   = b'Q'
 CMD_JSON   = b'J'
 CMD_BINARY = b'B'
-HEADER_STRUCT = struct.Struct('!cI')  # Type (char), Length (uint32)
+HEADER_STRUCT = struct.Struct('!cI') 
 
 # ==========================================
 # 3. CURSOR CLASS
 # ==========================================
 class Cursor:
-    """
-    Handles query execution and result fetching.
-    """
     def __init__(self, connection):
         self._conn = connection
         self._last_result = None
 
-    def execute(self, fql: str, mode: str = 'text') -> str:
+    def execute(self, fql: str, mode: str = 'text') -> Union[str, List, Dict]:
         """
-        Execute a FrancoDB Query Language (FQL) statement.
+        Execute FQL. 
+        Modes: 'text', 'json', 'binary'
         """
         if not self._conn.is_connected():
             raise OperationalError("Database is not connected")
 
-        # 1. Determine Protocol Type
+        # 1. Select Protocol
         msg_type = CMD_TEXT
         if mode == 'json': msg_type = CMD_JSON
         elif mode == 'binary': msg_type = CMD_BINARY
 
-        # 2. Encode Payload
+        # 2. Pack & Send
         payload_bytes = fql.encode('utf-8')
-        length = len(payload_bytes)
-
-        # 3. Pack Header and Send
-        # Header: [Type: 1 byte] [Length: 4 bytes]
-        header = HEADER_STRUCT.pack(msg_type, length)
+        header = HEADER_STRUCT.pack(msg_type, len(payload_bytes))
 
         try:
             self._conn.sock.sendall(header + payload_bytes)
-            self._last_result = self._read_response()
-            return self._last_result
+            
+            # 3. Read Response based on Mode
+            if mode == 'binary':
+                return self._read_binary_response()
+            else:
+                return self._read_text_response()
+                
         except socket.error as e:
-            raise OperationalError(f"Network error during query: {e}")
+            raise OperationalError(f"Network error: {e}")
 
-    def _read_response(self) -> str:
-        """
-        Reads the exact number of bytes specified by the server.
-        """
-        # Read the header first (assuming server sends back similar header)
-        # Note: If your server sends raw text back without a header, 
-        # you might need to adjust this. 
-        # reliable libraries usually expect a framed response (Length + Data).
-
-        # CURRENT IMPLEMENTATION ASSUMPTION: 
-        # For this stage of your project, we assume the server sends raw bytes back
-        # and closes/flushes. To make this professional, your C++ server 
-        # SHOULD send a length header back.
-
-        # Since the C++ server in previous steps just sent raw strings:
-        # We will use a basic read for now, but wrapper in a robust way.
+    def _read_text_response(self) -> str:
+        """Standard text/json reader."""
         try:
-            # In a real protocol, you read 4 bytes for length first.
-            # self._recv_n_bytes(4) -> length -> self._recv_n_bytes(length)
-
-            # Fallback for simple server:
-            response = self._conn.sock.recv(65536)
-            decoded = response.decode('utf-8').strip()
-
-            if "ERROR" in decoded:
-                raise QueryError(decoded)
-
-            return decoded
+            # In a real driver, we'd read the length header first.
+            # Assuming simple blocking read for now:
+            response = self._conn.sock.recv(65536).decode('utf-8').strip()
+            if "ERROR" in response and not response.startswith("{"): 
+                # Basic text error check
+                raise QueryError(response)
+            return response
         except socket.timeout:
             raise OperationalError("Query timed out")
 
-    def close(self):
-        pass
+    def _read_binary_response(self):
+        """
+        Unpacks the Professional Binary Protocol from C++.
+        """
+        sock = self._conn.sock
+        try:
+            # 1. Read Response Type (1 Byte)
+            # We use recv(1) and get the ordinal value
+            type_byte = sock.recv(1)
+            if not type_byte: return None
+            resp_type = type_byte[0]
 
-    def __enter__(self):
-        return self
+            # --- CASE: ERROR (0xFF) ---
+            if resp_type == 0xFF:
+                msg_len = struct.unpack('!I', sock.recv(4))[0]
+                error_msg = sock.recv(msg_len).decode('utf-8')
+                raise QueryError(f"Server Error: {error_msg}")
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+            # --- CASE: SIMPLE MESSAGE (0x01) ---
+            elif resp_type == 0x01:
+                msg_len = struct.unpack('!I', sock.recv(4))[0]
+                return sock.recv(msg_len).decode('utf-8')
+
+            # --- CASE: TABLE DATA (0x02) ---
+            elif resp_type == 0x02:
+                # A. Read Metadata
+                num_cols = struct.unpack('!I', sock.recv(4))[0]
+                num_rows = struct.unpack('!I', sock.recv(4))[0]
+
+                # B. Read Columns
+                columns = []
+                for _ in range(num_cols):
+                    col_type = sock.recv(1)[0] # 1 byte type
+                    name_len = struct.unpack('!I', sock.recv(4))[0]
+                    col_name = sock.recv(name_len).decode('utf-8')
+                    columns.append(col_name)
+
+                # C. Read Rows
+                result_rows = []
+                for _ in range(num_rows):
+                    row_data = []
+                    for _ in range(num_cols):
+                        # Currently C++ sends everything as String (Type 2)
+                        # So we read: [Len][String]
+                        val_len = struct.unpack('!I', sock.recv(4))[0]
+                        val_str = sock.recv(val_len).decode('utf-8')
+                        
+                        # Try to convert to int/float if it looks like one (Optional polish)
+                        if val_str.isdigit():
+                            row_data.append(int(val_str))
+                        else:
+                            row_data.append(val_str)
+                            
+                    result_rows.append(row_data)
+
+                # Return list of lists (or list of dicts if you prefer)
+                return result_rows
+
+        except Exception as e:
+            if isinstance(e, QueryError): raise e
+            raise OperationalError(f"Binary parse failed: {e}")
+
+    def close(self): pass
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc_val, exc_tb): self.close()
 
 # ==========================================
 # 4. CONNECTION CLASS
 # ==========================================
 class FrancoDB:
-    """
-    Main connection class representing a session with the database.
-    """
-    def __init__(self, host: str = 'localhost', port: int = 2501, timeout: int = 10):
+    def __init__(self, host='localhost', port=2501, timeout=10):
         self.host = host
         self.port = port
         self.timeout = timeout
-        self.sock: Optional[socket.socket] = None
-        self._connected = False
-
-    def connect(self, username: str = '', password: str = '', database: str = ''):
-        try:
-            self.sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-            self._connected = True
-
-            # Internal cursor for handshake
-            with self.cursor() as cur:
-                # 1. Login
-                if username and password:
-                    res = cur.execute(f"LOGIN {username} {password};\n")
-                    if "OK" not in res and "SUCCESS" not in res:
-                        raise AuthError(f"Login failed: {res}")
-
-                # 2. Select DB
-                if database:
-                    cur.execute(f"2ESTA5DEM {database};\n")
-
-        except socket.error as e:
-            self._connected = False
-            raise OperationalError(f"Could not connect to {self.host}:{self.port} - {e}")
-
-    def cursor(self) -> Cursor:
-        """Factory method to create a cursor."""
-        return Cursor(self)
-
-    def is_connected(self) -> bool:
-        return self._connected and self.sock is not None
-
-    def close(self):
-        if self.sock:
-            try:
-                self.sock.close()
-            except socket.error:
-                pass
         self.sock = None
         self._connected = False
 
-    # Context Manager Support
-    def __enter__(self):
-        return self
+    def connect(self, username='', password='', database=''):
+        try:
+            self.sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            self._connected = True
+            with self.cursor() as cur:
+                if username and password:
+                    res = cur.execute(f"LOGIN {username} {password};\n")
+                    if "OK" not in str(res) and "SUCCESS" not in str(res):
+                        raise AuthError(f"Login failed: {res}")
+                if database:
+                    cur.execute(f"2ESTA5DEM {database};\n")
+        except socket.error as e:
+            self._connected = False
+            raise OperationalError(f"Connection error: {e}")
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+    def cursor(self): return Cursor(self)
+    def is_connected(self): return self._connected and self.sock is not None
+    def close(self):
+        if self.sock:
+            try: self.sock.close()
+            except: pass
+        self.sock = None
+        self._connected = False
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc_val, exc_tb): self.close()
 
-# ==========================================
-# 5. HELPER FACTORY
-# ==========================================
 def connect(host='localhost', port=2501, user='', password='', database=''):
-    """
-    Helper function to create a connection in one line.
-    """
     conn = FrancoDB(host, port)
     conn.connect(user, password, database)
     return conn

@@ -7,10 +7,17 @@
 #include "common/exception.h"
 #include <algorithm>
 #include <sstream>
+#include <filesystem>
+
+#include "common/auth_manager.h"
+#include "common/session_context.h"
 
 namespace francodb {
+    struct SessionContext;
+    
+    SessionContext* g_session_context = nullptr;
 
-ExecutionEngine::ExecutionEngine(BufferPoolManager *bpm, Catalog *catalog)
+    ExecutionEngine::ExecutionEngine(BufferPoolManager *bpm, Catalog *catalog)
     : catalog_(catalog), exec_ctx_(new ExecutorContext(catalog, bpm)), 
       current_transaction_(nullptr), next_txn_id_(1), in_explicit_transaction_(false) {
 }
@@ -57,6 +64,16 @@ ExecutionResult ExecutionEngine::Execute(Statement *stmt) {
                 res = ExecuteDelete(dynamic_cast<DeleteStatement *>(stmt)); break;
             case StatementType::UPDATE_CMD:   
                 res = ExecuteUpdate(dynamic_cast<UpdateStatement *>(stmt)); break;
+            case StatementType::SHOW_USERS:   
+                res = ExecuteShowUsers(dynamic_cast<ShowUsersStatement *>(stmt)); break;
+            case StatementType::SHOW_DATABASES:
+                res = ExecuteShowDatabases(dynamic_cast<ShowDatabasesStatement *>(stmt)); break;
+            case StatementType::SHOW_TABLES:  
+                res = ExecuteShowTables(dynamic_cast<ShowTablesStatement *>(stmt)); break;
+            case StatementType::SHOW_STATUS:  
+                res = ExecuteShowStatus(dynamic_cast<ShowStatusStatement *>(stmt)); break;
+            case StatementType::WHOAMI:       
+                res = ExecuteWhoAmI(dynamic_cast<WhoAmIStatement *>(stmt)); break;
             case StatementType::BEGIN:        
                 res = ExecuteBegin(); break;
             case StatementType::ROLLBACK:     
@@ -259,5 +276,85 @@ ExecutionResult ExecutionEngine::ExecuteCommit() {
     in_explicit_transaction_ = false;
     return ExecutionResult::Message("COMMIT SUCCESS");
 }
+
+// --- SHOW DATABASES ---
+ExecutionResult ExecutionEngine::ExecuteShowDatabases(ShowDatabasesStatement *stmt) {
+    // List all database directories in the data/ folder (excluding system)
+    std::vector<std::string> dbs;
+    namespace fs = std::filesystem;
+    std::string data_dir = "data";
+    for (const auto &entry : fs::directory_iterator(data_dir)) {
+        if (entry.is_directory()) {
+            std::string name = entry.path().filename().string();
+            if (name != "system") dbs.push_back(name);
+        } else if (entry.is_regular_file()) {
+            std::string fname = entry.path().filename().string();
+            if (fname.ends_with(".francodb")) {
+                std::string dbname = fname.substr(0, fname.size() - 9);
+                if (dbname != "system") dbs.push_back(dbname);
+            }
+        }
+    }
+    std::sort(dbs.begin(), dbs.end());
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names.push_back("Database");
+    for (const auto &db : dbs) rs->AddRow({db});
+    return ExecutionResult::Data(rs);
+}
+
+// --- SHOW TABLES ---
+ExecutionResult ExecutionEngine::ExecuteShowTables(ShowTablesStatement *stmt) {
+    std::vector<std::string> tables = catalog_->GetAllTableNames();
+    std::sort(tables.begin(), tables.end());
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names.push_back("Table");
+    for (const auto &tbl : tables) rs->AddRow({tbl});
+    return ExecutionResult::Data(rs);
+}
+
+// --- SHOW USERS ---
+ExecutionResult ExecutionEngine::ExecuteShowUsers(ShowUsersStatement *stmt) {
+    // Get users from AuthManager (global, not per ExecutorContext)
+    extern AuthManager *g_auth_manager; // You may need to declare this in a header or pass it in
+    std::vector<UserInfo> users = g_auth_manager->GetAllUsers();
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names = {"Username", "Role"};
+    for (const auto &user : users) {
+        // Find the role for the current DB, or show all roles as a comma-separated string
+        std::string roles;
+        for (const auto &pair : user.db_roles) {
+            if (!roles.empty()) roles += ", ";
+            switch (pair.second) {
+                case UserRole::SUPERADMIN: roles += "SUPERADMIN"; break;
+                case UserRole::ADMIN: roles += "ADMIN"; break;
+                case UserRole::USER: roles += "USER"; break;
+                case UserRole::READONLY: roles += "READONLY"; break;
+                case UserRole::DENIED: roles += "DENIED"; break;
+            }
+            roles += "@" + pair.first;
+        }
+        rs->AddRow({user.username, roles});
+    }
+    return ExecutionResult::Data(rs);
+}
+
+// --- SHOW STATUS ---
+ExecutionResult ExecutionEngine::ExecuteShowStatus(ShowStatusStatement *stmt) {
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names = {"Status"};
+    rs->AddRow({"OK"});
+    return ExecutionResult::Data(rs);
+}
+
+// --- WHOAMI ---
+    ExecutionResult ExecutionEngine::ExecuteWhoAmI(WhoAmIStatement *stmt) {
+        // FIXED: Using the global raw pointer g_session_context defined at the top
+        std::string user = (g_session_context) ? g_session_context->current_user : "unknown";
+        
+        auto rs = std::make_shared<ResultSet>();
+        rs->column_names = {"User"};
+        rs->AddRow({user});
+        return ExecutionResult::Data(rs);
+    }
 
 } // namespace francodb

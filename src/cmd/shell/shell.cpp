@@ -172,7 +172,11 @@ int main(int argc, char* argv[]) {
              std::string url = (cmd1 == "login") ? cmd2 : cmd1;
              if (db_client.ConnectFromString(url)) {
                  connected = true;
-                 // (Simple parsing for prompt display skipped for brevity)
+                 // Parse prompt info for immediate feedback
+                 size_t u_start = url.find("://") + 3;
+                 size_t u_end = url.find(':', u_start);
+                 if (u_end != std::string::npos) username = url.substr(u_start, u_end - u_start);
+                 if (url.find_last_of('/') > url.find('@')) current_db = url.substr(url.find_last_of('/') + 1);
              } else {
                  return 1;
              }
@@ -183,18 +187,67 @@ int main(int argc, char* argv[]) {
         std::cout << "==========================================" << std::endl;
         std::cout << "            FrancoDB Shell v2.1           " << std::endl;
         std::cout << "==========================================" << std::endl;
-        // ... (Manual login logic same as before) ...
-        // For brevity in this fix, assuming user connects or uses wizard above
+        
+        std::string password, host, port_str;
+        int port = net::DEFAULT_PORT;
+        
+        std::cout << "\nUsername: ";
+        if (!std::getline(std::cin, username)) return 0;
+        std::cout << "Password: ";
+        if (!std::getline(std::cin, password)) return 0;
+        
+        std::cout << "Host [localhost]: ";
+        std::getline(std::cin, host);
+        if (host.empty()) host = "127.0.0.1";
+        
+        std::cout << "Port [2501]: ";
+        std::getline(std::cin, port_str);
+        if (!port_str.empty()) try { port = std::stoi(port_str); } catch(...) {}
+        
+        if (!db_client.Connect(host, port, username, password)) {
+            std::cerr << "[FATAL] Connection Failed." << std::endl;
+            return 1;
+        }
+        connected = true;
     }
 
-    // Shell Loop
+    // -------------------------------------------------------------------------
+    // SHELL LOOP
+    // -------------------------------------------------------------------------
     std::string input;
     while (connected) {
         std::cout << username << "@" << current_db << "> ";
-        std::getline(std::cin, input);
-        if (input == "exit") break;
-        if (!input.empty()) std::cout << db_client.Query(input) << std::endl;
+        std::cout.flush(); // Ensure prompt prints before waiting for input
+        
+        if (!std::getline(std::cin, input)) break;
+        if (input == "exit" || input == "quit") break;
+        if (input.empty()) continue;
+
+        // --- [FIX] RESTORED PROMPT UPDATE LOGIC ---
+        // Check if command is "USE <db>" to update the prompt immediately
+        std::string upper_input = input;
+        std::transform(upper_input.begin(), upper_input.end(), upper_input.begin(), ::toupper);
+        
+        if (upper_input.rfind("USE ", 0) == 0) {
+            std::string new_db = input.substr(4);
+            // Remove trailing semicolon if present
+            if (!new_db.empty() && new_db.back() == ';') {
+                new_db.pop_back();
+            }
+            // Remove extra whitespace
+            size_t first = new_db.find_first_not_of(' ');
+            if (std::string::npos != first) {
+                 size_t last = new_db.find_last_not_of(' ');
+                 current_db = new_db.substr(first, (last - first + 1));
+            } else {
+                 current_db = new_db;
+            }
+        }
+        // ------------------------------------------
+
+        std::cout << db_client.Query(input) << std::endl;
     }
 
+    db_client.Disconnect();
     return 0;
 }
