@@ -134,6 +134,10 @@ namespace francodb {
         // SAFEGUARD: Only allow writing to page 0 if the data is the magic header
         if (page_id == 0) {
             if (std::memcmp(page_data, FRAME_FILE_MAGIC, MAGIC_LEN) != 0) {
+                std::cerr << "[FATAL] Attempt to overwrite page 0 (magic header) with invalid data!" << std::endl;
+                std::cerr << "[DEBUG] First 32 bytes: ";
+                for (size_t i = 0; i < 32; ++i) std::cerr << std::hex << (0xFF & page_data[i]) << " ";
+                std::cerr << std::dec << std::endl;
                 throw std::runtime_error("Attempt to overwrite page 0 (magic header) with invalid data. Aborted.");
             }
         }
@@ -161,6 +165,10 @@ namespace francodb {
             throw std::runtime_error("Disk I/O Error: Failed to write page " + std::to_string(page_id));
         }
 #endif
+        // Ensure durability for page 0 and other critical pages
+        if (page_id == 0) {
+            FlushLog();
+        }
     }
 
     void DiskManager::FlushLog() {
@@ -213,6 +221,8 @@ namespace francodb {
         // 3. Write Actual Data (encrypted if enabled)
         out.write(data_to_write.c_str(), size);
         out.close();
+        // Ensure metadata is durable
+        FlushLog();
     }
 
     bool DiskManager::ReadMetadata(std::string &data) {

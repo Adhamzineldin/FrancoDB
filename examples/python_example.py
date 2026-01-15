@@ -85,7 +85,7 @@ if __name__ == "__main__":
         
         # Text Mode
         print("--- Text Mode ---")
-        client.query("2e3mel gadwal users (id rakam, name gomla);")
+        client.query("2e3mel gadwal users (id rakam asasi, name gomla);")
         client.query("emla gowa users elkeyam (1, 'Alice');")
         print(client.query("2e5tar * men users;"))
         

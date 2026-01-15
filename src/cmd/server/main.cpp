@@ -7,12 +7,15 @@
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <memory>
+
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
 #include <sys/time.h>
 #endif
+
 #include "network/franco_server.h"
 #include "storage/disk/disk_manager.h"
 #include "buffer/buffer_pool_manager.h"
@@ -24,13 +27,8 @@
 using namespace francodb;
 namespace fs = std::filesystem;
 
-static FrancoServer* g_server = nullptr;
-static BufferPoolManager* g_bpm = nullptr;
-static Catalog* g_catalog = nullptr;
-static BufferPoolManager* g_system_bpm = nullptr;
-static Catalog* g_system_catalog = nullptr;
-static AuthManager* g_auth_manager = nullptr;
-static std::atomic<bool> g_shutdown_requested(false);
+// GLOBAL SERVER POINTER (For Signal Handler)
+std::unique_ptr<FrancoServer> g_Server;
 
 std::string GetExecutableDir() {
 #ifdef _WIN32
@@ -42,22 +40,20 @@ std::string GetExecutableDir() {
 #endif
 }
 
-// FIX: Robust Logging Setup with Retry Logic
-// src/cmd/server/main_server.cpp
-
-// FIX: Point to ../log/francodb_server.log
+// ---------------------------------------------------------
+// LOGGING SETUP (Service Mode)
+// ---------------------------------------------------------
 void SetupServiceLogging(const std::string& exe_dir) {
-    // 1. Calculate Log Path (.../FrancoDB/log/francodb_server.log)
     fs::path bin_path = exe_dir;
     fs::path log_dir = bin_path.parent_path() / "log";
     
     if (!fs::exists(log_dir)) {
-        fs::create_directories(log_dir);
+        try { fs::create_directories(log_dir); } catch(...) {}
     }
 
     fs::path log_path = log_dir / "francodb_server.log";
     
-    // Try up to 5 times to grab the file lock
+    // Try to grab file lock
     for (int i = 0; i < 5; i++) {
         FILE* fp = freopen(log_path.string().c_str(), "a", stdout);
         if (fp) {
@@ -70,53 +66,30 @@ void SetupServiceLogging(const std::string& exe_dir) {
     }
 }
 
-bool IsFileCorrupt(const std::string& path) {
-    if (!fs::exists(path)) return false; 
-    return fs::file_size(path) == 0;     
-}
-
-void SaveAllData() {
-    std::cerr << "\n[SHUTDOWN] Saving all data to disk..." << std::endl;
-    try {
-        if (g_auth_manager) g_auth_manager->SaveUsers();
-        if (g_system_catalog) g_system_catalog->SaveCatalog();
-        if (g_system_bpm) g_system_bpm->FlushAllPages();
-        if (g_catalog) g_catalog->SaveCatalog();
-        if (g_bpm) g_bpm->FlushAllPages();
-        std::cout << "[SHUTDOWN] All data saved successfully." << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "[SHUTDOWN] Error during save: " << e.what() << std::endl;
-    }
-}
-
-void CrashHandler(int signal) {
-    std::cout << "\n[CRASH HANDLER] Signal " << signal << " received." << std::endl;
-    g_shutdown_requested = true;
-    SaveAllData();
-    if (g_server) g_server->RequestShutdown();
-    std::exit(1);
-}
-
+// ---------------------------------------------------------
+// SIGNAL HANDLER (The Fix for Corruption)
+// ---------------------------------------------------------
 #ifdef _WIN32
-BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
-    g_shutdown_requested = true;
-    SaveAllData();
-    if (g_server) {
-        g_server->RequestShutdown();
-        Sleep(2000);
+BOOL WINAPI ConsoleHandler(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT || signal == CTRL_CLOSE_EVENT || signal == CTRL_SHUTDOWN_EVENT) {
+        std::cout << "\n[SYSTEM] Shutdown signal received (" << signal << "). Flushing data..." << std::endl;
+        
+        if (g_Server) {
+            g_Server->Shutdown(); // This saves Catalog and Flushes Pages safely
+        } else {
+            std::cout << "[SYSTEM] Server pointer is null, force exiting." << std::endl;
+        }
+        return TRUE;
     }
-    return TRUE;
+    return FALSE;
 }
 #endif
 
-void TerminateHandler() {
-    std::cerr << "\n[TERMINATE HANDLER] Uncaught exception." << std::endl;
-    SaveAllData();
-    std::abort();
-}
-
+// ---------------------------------------------------------
+// MAIN ENTRY POINT
+// ---------------------------------------------------------
 int main(int argc, char* argv[]) {
-    // 1. CHECK ARGUMENTS (New logic for CLion support)
+    // 1. Check Arguments
     bool is_service = false;
     if (argc > 1 && std::string(argv[1]) == "--service") {
         is_service = true;
@@ -124,7 +97,7 @@ int main(int argc, char* argv[]) {
 
     std::string exe_dir = GetExecutableDir();
     
-    // 2. SETUP LOGGING (Only redirect if running as Service)
+    // 2. Setup Logging
     if (is_service) {
         SetupServiceLogging(exe_dir);
         std::cout << "==========================================" << std::endl;
@@ -136,15 +109,15 @@ int main(int argc, char* argv[]) {
         std::cout << "==========================================" << std::endl;
     }
 
-    std::set_terminate(TerminateHandler);
+    // 3. Register Handler
 #ifdef _WIN32
-    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-    signal(SIGINT, CrashHandler);
-    signal(SIGTERM, CrashHandler);
+    if (!SetConsoleCtrlHandler(ConsoleHandler, TRUE)) {
+        std::cerr << "[WARN] Could not register console handler." << std::endl;
+    }
 #endif
 
     try {
-        // 3. Load Config
+        // 4. Load Config
         fs::path config_path = fs::path(exe_dir) / "francodb.conf";
         auto& config = ConfigManager::GetInstance();
         
@@ -156,75 +129,46 @@ int main(int argc, char* argv[]) {
             config.SaveConfig(config_path.string());
         }
         
-        // 4. Resolve Data Directory
+        // 5. Resolve Data Directory
         int port = config.GetPort();
         fs::path data_dir_path = fs::absolute(fs::path(config.GetDataDirectory()));
-        // If config path was relative, anchor it to exe dir
         if (fs::path(config.GetDataDirectory()).is_relative()) {
             data_dir_path = fs::absolute(fs::path(exe_dir) / config.GetDataDirectory());
         }
-
         std::cout << "[INFO] Data Directory: " << data_dir_path << std::endl;
-        
-        // 5. Create Directory & Verify Files
         fs::create_directories(data_dir_path);
-        fs::path db_path = data_dir_path / "francodb.db";
 
-        if (IsFileCorrupt(db_path.string())) {
-            std::cout << "[WARN] Corrupt DB file detected. Resetting..." << std::endl;
-            fs::remove(db_path);
-        }
-
-        // 6. Initialize Engine
-        std::cout << "[INFO] Initializing Engine..." << std::endl;
+        // 6. Initialize Primary Engine (User Data)
+        // Note: System DB is handled inside FrancoServer constructor now
+        fs::path db_path = data_dir_path / "francodb.db"; // Legacy path, mostly unused now
+        
         auto disk_manager = std::make_unique<DiskManager>(db_path.string());
-        if (config.IsEncryptionEnabled()) {
-            disk_manager->SetEncryptionKey(config.GetEncryptionKey());
-        }
+        if (config.IsEncryptionEnabled()) disk_manager->SetEncryptionKey(config.GetEncryptionKey());
         
         auto bpm = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, disk_manager.get());
         auto catalog = std::make_unique<Catalog>(bpm.get());
         
-        try { catalog->LoadCatalog(); } 
-        catch (...) { std::cout << "[INFO] New Catalog Initialized." << std::endl; }
+        // Try load user catalog
+        try { 
+            if (catalog->GetAllTableNames().empty()) catalog->LoadCatalog(); 
+        } catch (...) {}
         
-        catalog->SaveCatalog();
-        bpm->FlushAllPages();
-        
-        g_bpm = bpm.get();
-        g_catalog = catalog.get();
-        
-        // 7. Initialize Server
+        // 7. Initialize Server (This loads System DB safely)
         std::cout << "[INFO] Initializing Server Logic..." << std::endl;
-        FrancoServer server(bpm.get(), catalog.get());
-        g_server = &server;
+        g_Server = std::make_unique<FrancoServer>(bpm.get(), catalog.get());
         
-        g_system_bpm = server.GetSystemBpm();
-        g_system_catalog = server.GetSystemCatalog();
-        g_auth_manager = server.GetAuthManager();
-        
-        // 8. START LISTENING
+        // 8. Start
         std::cout << "[INFO] Starting Network Listener on port " << port << "..." << std::endl;
+        g_Server->Start(port);
         
-        try {
-            server.Start(port);
-        } catch (const std::exception& e) {
-            std::cerr << "[FATAL] Network Error: " << e.what() << std::endl;
-            throw; 
-        }
-        
-        if (g_shutdown_requested) {
-            SaveAllData();
-        }
-        g_server = nullptr;
+        // 9. Clean Exit
+        g_Server.reset(); // Destructor saves everything
 
     } catch (const std::exception &e) {
         std::cerr << "[CRASH] Critical Failure: " << e.what() << std::endl;
-        CrashHandler(0);
         return 1;
     } catch (...) {
         std::cerr << "[CRASH] Unknown Critical Failure." << std::endl;
-        CrashHandler(0);
         return 1;
     }
 

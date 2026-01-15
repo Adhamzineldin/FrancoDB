@@ -193,46 +193,79 @@ begin
      GeneratedEncryptionKey := GenerateEncryptionKey();
 end;
 
+// HELPER: Checks if a specific EXE is running using tasklist
+function IsAppRunning(const FileName: string): Boolean;
+var
+  ResultCode: Integer;
+begin
+  // tasklist returns 0 if found, 1 if not found
+  Exec('cmd.exe', '/C tasklist /FI "IMAGENAME eq ' + FileName + '" | find /I "' + FileName + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := (ResultCode = 0);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Port, User, Pass, Key: String;
   ConfigContent, SummaryText: String;
   EncEnabled: Boolean;
   ResultCode, I: Integer;
-  ServicePath, DataDir, LogDir: String; // Added LogDir variable
+  ServicePath, DataDir, LogDir: String;
 begin
-  // 1. CLEANUP OLD SERVICE & FILES
+  // ==============================================================================
+  // 1. SAFE SHUTDOWN LOGIC (NO FORCE KILL)
+  // ==============================================================================
   if CurStep = ssInstall then
   begin
+    // A. Ask the service to stop nicely
     Exec('sc.exe', 'stop FrancoDBService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(200);
     
-    // Force Kill processes
-    Exec('taskkill.exe', '/F /IM francodb_server.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Exec('taskkill.exe', '/F /IM francodb_shell.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Exec('taskkill.exe', '/F /IM francodb_service.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    // B. Wait up to 30 Seconds (checking every 1 second)
+    WizardForm.StatusLabel.Caption := 'Waiting for graceful database shutdown (Max 30s)...';
     
-    Sleep(500);
+    for I := 1 to 30 do
+    begin
+      if not IsAppRunning('francodb_server.exe') then
+      begin
+        // Process is gone! We can proceed safely.
+        Break;
+      end;
+      Sleep(1000); // Wait 1 second
+    end;
+
+    // C. The "User Must Stop It" Fallback
+    // If it is STILL running after 30 seconds, we refuse to continue.
+    while IsAppRunning('francodb_server.exe') do
+    begin
+      // FIX: Changed 'mbCritical' to 'mbError'
+      if MsgBox('Safe Shutdown Failed.' + #13#10 + #13#10 +
+                'The server is taking too long to save data.' + #13#10 +
+                'To prevent corruption, we will NOT force kill it.' + #13#10 + #13#10 +
+                'Please open Task Manager, end "francodb_server.exe", and click OK.', 
+                mbError, MB_OKCANCEL) = IDCANCEL then
+      begin
+        Abort; // User cancelled installation
+      end;
+      // Loop continues until user kills it and clicks OK
+    end;
+    
+    // D. Only NOW do we cleanup the service entry
     Exec('sc.exe', 'delete FrancoDBService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-    // --- NEW: WIPE OLD LOGS ---
-    // DelTree(Path, IsDir, DeleteFiles, DeleteSubdirs)
+    // E. Wipe logs (Safe now because process is definitely gone)
     DelTree(ExpandConstant('{app}\log'), True, True, True);
   end;
 
+  // ==============================================================================
   // 2. CONFIGURATION & PERMISSIONS
+  // ==============================================================================
   if CurStep = ssPostInstall then
   begin
     DataDir := ExpandConstant('{app}\data');
     LogDir  := ExpandConstant('{app}\log');
 
-    // ==============================================================================
-    // PERMISSION FIX (THE "NUCLEAR OPTION")
-    // ==============================================================================
-    // Grant Modify (M) permission to Users for Data AND Log folders recursively (/T)
+    // Grant Permissions
     Exec('icacls', '"' + DataDir + '" /grant Users:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('icacls', '"' + LogDir + '" /grant Users:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    // ==============================================================================
 
     if not IsUpgrade then
     begin
