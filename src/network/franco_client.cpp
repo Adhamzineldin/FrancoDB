@@ -42,99 +42,92 @@ namespace francodb {
 #endif
     }
 
-    bool FrancoClient::Connect(const std::string& ip, int port, const std::string &username, const std::string &password, const std::string &database) {
-        socket_t s = socket(AF_INET, SOCK_STREAM, 0);
-        if (s == INVALID_SOCK) {
-#ifdef _WIN32
-            int err = WSAGetLastError();
-#else
-            int err = errno;
-#endif
-            std::cerr << "[DEBUG] socket() failed with error: " << err << std::endl;
+    bool FrancoClient::Connect(const std::string& host, int port, const std::string &username, const std::string &password, const std::string &database) {
+        // 1. Resolve Hostname (DNS)
+        // This handles "localhost", "127.0.0.1", "google.com", IPv4, and IPv6 automatically.
+        struct addrinfo hints{}, *result = nullptr;
+        std::memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;     // Allow IPv4 or IPv6
+        hints.ai_socktype = SOCK_STREAM; // TCP
+
+        std::string port_str = std::to_string(port);
+        int gai_rc = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &result);
+        
+        if (gai_rc != 0) {
+            std::cerr << "[ERROR] Could not resolve host '" << host << "': " 
+                      << gai_strerror(gai_rc) << std::endl;
             return false;
         }
 
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
+        // 2. Iterate through results (The "Postgres Way")
+        // If a domain has multiple IPs (or IPv6 + IPv4), we try them one by one.
+        socket_t s = INVALID_SOCK;
+        struct addrinfo *ptr = nullptr;
+        
+        for (ptr = result; ptr != nullptr; ptr = ptr->ai_next) {
+            // Create a socket for this specific result (IPv4 or IPv6)
+            s = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+            if (s == INVALID_SOCK) {
+                continue; // Try next address
+            }
 
-        // Use system DNS / name resolution (getaddrinfo) so we support hostnames
-        struct addrinfo hints{};
-        struct addrinfo *result = nullptr;
-        hints.ai_family = AF_INET;      // IPv4
-        hints.ai_socktype = SOCK_STREAM;
+            // Attempt to connect
+            if (connect(s, ptr->ai_addr, (int)ptr->ai_addrlen) != -1) {
+                break; // Success! We found a working address.
+            }
 
-        int gai_rc = getaddrinfo(ip.c_str(), nullptr, &hints, &result);
-        if (gai_rc != 0 || result == nullptr) {
+            // Connection failed, close this socket and try the next one
 #ifdef _WIN32
             closesocket(s);
 #else
             close(s);
 #endif
-            std::cerr << "[DEBUG] getaddrinfo() failed for host: " << ip
-                      << " (rc=" << gai_rc << ")" << std::endl;
-            return false;
+            s = INVALID_SOCK;
         }
 
-        // Take the first resolved address
-        auto *resolved = reinterpret_cast<sockaddr_in *>(result->ai_addr);
-        addr.sin_addr = resolved->sin_addr;
         freeaddrinfo(result);
 
-        if (connect(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-#ifdef _WIN32
-            int err = WSAGetLastError();
-            closesocket(s);
-#else
-            int err = errno;
-            close(s);
-#endif
-            std::cerr << "[DEBUG] connect() failed to " << ip << ":" << port << " with error: " << err << std::endl;
+        // 3. Check if we connected
+        if (s == INVALID_SOCK) {
+            std::cerr << "[ERROR] Could not connect to any address for host: " << host << std::endl;
             return false;
         }
 
+        // 4. Store Socket
         sock_ = (uintptr_t)s;
         is_connected_ = true;
 
-        // Require auth to establish a usable connection (send LOGIN immediately)
+        // 5. Authenticate (LOGIN)
+        // This mimics standard DB clients: Connect -> Handshake immediately.
         if (!username.empty()) {
             std::string login_cmd = "LOGIN " + username + " " + password + ";\n";
             std::string res = Query(login_cmd);
-            // server replies "LOGIN OK ..." on success
+            
             if (res.find("LOGIN OK") == std::string::npos) {
-                std::cerr << "[DEBUG] LOGIN failed. Server response: " << res << std::endl;
+                std::cerr << "[FATAL] Authentication failed: " << res << std::endl;
                 Disconnect();
                 return false;
             }
         }
         
-        // Auto-switch to database if provided
+        // 6. Select Database
         if (!database.empty()) {
-            std::string use_cmd = "USE " + database + ";\n";
-            Query(use_cmd); // Don't fail if DB doesn't exist, just try
+            Query("USE " + database + ";\n");
         }
         
         return true;
     }
 
     bool FrancoClient::ConnectFromString(const std::string &connection_string) {
-        // Parse: maayn://user:pass@host:port/dbname
-        // Format: protocol://[user[:pass]@]host[:port][/database]
-        // Examples:
-        //   maayn://maayn:root@localhost:2501/mydb
-        //   maayn://maayn:root@localhost/mydb
-        //   maayn://maayn:root@localhost
-        //   maayn://localhost
-        
         if (connection_string.find("maayn://") != 0) {
             return false;
         }
         
-        std::string rest = connection_string.substr(8); // Skip "maayn://"
+        std::string rest = connection_string.substr(8);
         std::string username, password, host, database;
         int port = net::DEFAULT_PORT;
         
-        // Extract user:pass@ if present
+        // Parse User:Pass
         size_t at_pos = rest.find('@');
         if (at_pos != std::string::npos) {
             std::string auth = rest.substr(0, at_pos);
@@ -153,34 +146,27 @@ namespace francodb {
             password = net::DEFAULT_ADMIN_PASSWORD;
         }
         
-        // Extract database if present (after /)
+        // Parse Database
         size_t slash_pos = rest.find('/');
         if (slash_pos != std::string::npos) {
             database = rest.substr(slash_pos + 1);
             rest = rest.substr(0, slash_pos);
         }
         
-        // Extract port if present (after :)
+        // Parse Host:Port
         size_t colon_pos = rest.find(':');
         if (colon_pos != std::string::npos) {
             host = rest.substr(0, colon_pos);
-            std::string port_str = rest.substr(colon_pos + 1);
             try {
-                port = std::stoi(port_str);
-            } catch (...) {
-                return false; // Invalid port
-            }
+                port = std::stoi(rest.substr(colon_pos + 1));
+            } catch (...) { return false; }
         } else {
             host = rest;
         }
         
-        if (host.empty()) {
-            std::cerr << "[DEBUG] Empty host after parsing connection string" << std::endl;
-            return false;
-        }
+        if (host.empty()) return false;
         
-        std::cerr << "[DEBUG] Parsed connection string: host=" << host << ", port=" << port 
-                  << ", user=" << username << ", db=" << (database.empty() ? "(none)" : database) << std::endl;
+        std::cout << "[INFO] Connecting to " << host << ":" << port << " as " << username << "..." << std::endl;
         
         return Connect(host, port, username, password, database);
     }
@@ -188,7 +174,6 @@ namespace francodb {
     std::string FrancoClient::Query(const std::string& sql) {
         if (!is_connected_) return "ERROR: Not connected.";
 
-        // 1. Determine Type
         MsgType type;
         switch (protocol_type_) {
             case ProtocolType::JSON:   type = MsgType::CMD_JSON; break;
@@ -196,21 +181,29 @@ namespace francodb {
             default:                   type = MsgType::CMD_TEXT; break;
         }
 
-        // 2. Prepare Header
         PacketHeader header;
         header.type = type;
-        header.length = htonl(sql.size()); // Convert host-to-network long (Big Endian standard)
+        header.length = htonl(sql.size());
 
-        // 3. Send Header (5 bytes)
-        send((socket_t)sock_, (char*)&header, sizeof(header), 0);
+        if (send((socket_t)sock_, (char*)&header, sizeof(header), 0) < 0) {
+            is_connected_ = false;
+            return "ERROR: Connection Lost (Write)";
+        }
 
-        // 4. Send Payload (SQL)
-        send((socket_t)sock_, sql.c_str(), sql.size(), 0);
+        if (send((socket_t)sock_, sql.c_str(), sql.size(), 0) < 0) {
+            is_connected_ = false;
+            return "ERROR: Connection Lost (Write Payload)";
+        }
 
-        // 5. Receive Response (Existing logic...)
         char buffer[net::MAX_PACKET_SIZE];
         int bytes = recv((socket_t)sock_, buffer, net::MAX_PACKET_SIZE, 0);
-        return std::string(buffer, bytes > 0 ? bytes : 0);
+        
+        if (bytes <= 0) {
+            is_connected_ = false;
+            return "ERROR: Server closed connection";
+        }
+        
+        return std::string(buffer, bytes);
     }
 
     void FrancoClient::Disconnect() {
