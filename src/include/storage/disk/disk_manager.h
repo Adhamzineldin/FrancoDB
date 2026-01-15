@@ -21,6 +21,8 @@
 #include "common/config_manager.h"
 
 namespace francodb {
+    uint32_t CalculateChecksum(const char* data);
+    void UpdatePageChecksum(char* page_data, uint32_t page_id);
 
     /**
      * DiskManager takes care of the allocation and deallocation of pages within a database.

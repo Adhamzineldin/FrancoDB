@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <filesystem>
+#include <cstdio>
 
 namespace francodb {
     constexpr char FRAME_FILE_MAGIC[] = "FRANCO_DATABASE_MADE_BY_MAAYN";
@@ -12,6 +13,16 @@ namespace francodb {
     constexpr char META_FILE_MAGIC[] = "FRANCO_META"; 
     constexpr size_t META_MAGIC_LEN = sizeof(META_FILE_MAGIC) - 1;
 
+    
+    uint32_t CalculateChecksum(const char* data) {
+        uint32_t sum = 0;
+        // We skip the first 4 bytes where the checksum itself is stored
+        for (size_t i = 4; i < PAGE_SIZE; i++) {
+            sum += static_cast<uint8_t>(data[i]);
+        }
+        return sum;
+    }
+    
     DiskManager::DiskManager(const std::string &db_file) {
         // 1. Enforce the ".francodb" extension
         std::filesystem::path path(db_file);
@@ -104,71 +115,60 @@ namespace francodb {
         uint32_t offset = page_id * PAGE_SIZE;
 
 #ifdef _WIN32
-        OVERLAPPED overlapped = {};
+        OVERLAPPED overlapped = {0};
         overlapped.Offset = offset;
         DWORD bytes_read;
-        if (!ReadFile(db_io_handle_, page_data, PAGE_SIZE, &bytes_read, &overlapped)) {
-            throw std::runtime_error("Disk I/O Error: Failed to read page " + std::to_string(page_id));
-        }
-        if (bytes_read < PAGE_SIZE) {
-            std::memset(page_data + bytes_read, 0, PAGE_SIZE - bytes_read);
-        }
-#else
-        ssize_t bytes_read = pread(db_io_fd_, page_data, PAGE_SIZE, offset);
-        if (bytes_read == -1) {
-            throw std::runtime_error("Disk I/O Error: Failed to read page " + std::to_string(page_id));
-        }
-        if (bytes_read < PAGE_SIZE) {
-            std::memset(page_data + bytes_read, 0, PAGE_SIZE - bytes_read);
-        }
+        ReadFile(db_io_handle_, page_data, PAGE_SIZE, &bytes_read, &overlapped);
 #endif
-        
-        // Decrypt if encryption is enabled
+
+        if (bytes_read < PAGE_SIZE) return;
+
+        // 1. Decrypt first
         if (encryption_enabled_ && !encryption_key_.empty() && page_id > 0) {
-            // Don't decrypt page 0 (magic header)
             Encryption::DecryptXOR(encryption_key_, page_data, PAGE_SIZE);
+        }
+
+        // 2. Verify Checksum
+        // Only check checksum for data pages (not bitmap or meta pages)
+        if (page_id > 2) {
+            uint32_t stored_checksum;
+            std::memcpy(&stored_checksum, page_data, sizeof(uint32_t));
+            uint32_t actual_checksum = CalculateChecksum(page_data);
+            // std::fprintf(stderr, "[DEBUG] ReadPage: page_id=%u stored_checksum=%08x actual_checksum=%08x first_bytes=%02x %02x %02x %02x\n", page_id, stored_checksum, actual_checksum, (unsigned char)page_data[0], (unsigned char)page_data[1], (unsigned char)page_data[2], (unsigned char)page_data[3]);
+            if (stored_checksum != actual_checksum) {
+                std::cerr << "[CRITICAL] Checksum Mismatch on Page " << page_id << "!" << std::endl;
+                throw std::runtime_error("Data Corruption Detected (Checksum Error)");
+            }
         }
     }
 
     void DiskManager::WritePage(uint32_t page_id, const char *page_data) {
-        // SAFEGUARD: Only allow writing to page 0 if the data is the magic header
-        if (page_id == 0) {
-            if (std::memcmp(page_data, FRAME_FILE_MAGIC, MAGIC_LEN) != 0) {
-                std::cerr << "[FATAL] Attempt to overwrite page 0 (magic header) with invalid data!" << std::endl;
-                std::cerr << "[DEBUG] First 32 bytes: ";
-                for (size_t i = 0; i < 32; ++i) std::cerr << std::hex << (0xFF & page_data[i]) << " ";
-                std::cerr << std::dec << std::endl;
-                throw std::runtime_error("Attempt to overwrite page 0 (magic header) with invalid data. Aborted.");
-            }
-        }
-        // Encrypt if encryption is enabled (make a copy to avoid modifying original)
-        char encrypted_data[PAGE_SIZE];
-        const char* data_to_write = page_data;
-        if (encryption_enabled_ && !encryption_key_.empty() && page_id > 0) {
-            // Don't encrypt page 0 (magic header)
-            std::memcpy(encrypted_data, page_data, PAGE_SIZE);
-            Encryption::EncryptXOR(encryption_key_, encrypted_data, PAGE_SIZE);
-            data_to_write = encrypted_data;
-        }
-        uint32_t offset = page_id * PAGE_SIZE;
+        char processed_data[PAGE_SIZE];
+        std::memcpy(processed_data, page_data, PAGE_SIZE);
 
+        // 1. Calculate and store Checksum in the first 4 bytes
+        // (Excluding Page 0, 1, 2 which are special: Magic, Reserved, Bitmap)
+        if (page_id > 2) {
+            uint32_t checksum = CalculateChecksum(processed_data);
+            std::memcpy(processed_data, &checksum, sizeof(uint32_t));
+        }
+
+        // 2. Encrypt if enabled
+        if (encryption_enabled_ && !encryption_key_.empty() && page_id > 0) {
+            Encryption::EncryptXOR(encryption_key_, processed_data, PAGE_SIZE);
+        }
+
+        // 3. Physical Write
+        uint32_t offset = page_id * PAGE_SIZE;
 #ifdef _WIN32
-        OVERLAPPED overlapped = {};
+        OVERLAPPED overlapped = {0};
         overlapped.Offset = offset;
         DWORD bytes_written;
-        if (!WriteFile(db_io_handle_, data_to_write, PAGE_SIZE, &bytes_written, &overlapped)) {
-            throw std::runtime_error("Disk I/O Error: Failed to write page " + std::to_string(page_id));
-        }
-#else
-        ssize_t bytes_written = pwrite(db_io_fd_, data_to_write, PAGE_SIZE, offset);
-        if (bytes_written == -1) {
-            throw std::runtime_error("Disk I/O Error: Failed to write page " + std::to_string(page_id));
+        if (!WriteFile(db_io_handle_, processed_data, PAGE_SIZE, &bytes_written, &overlapped)) {
+            throw std::runtime_error("Disk Write Failure on Page " + std::to_string(page_id));
         }
 #endif
-        // Ensure durability for page 0 and other critical pages
-        if (page_id == 0) {
-            FlushLog();
-        }
+        // std::fprintf(stderr, "[DEBUG] WritePage: page_id=%u checksum=%08x first_bytes=%02x %02x %02x %02x\n", page_id, *(const uint32_t*)page_data, (unsigned char)page_data[0], (unsigned char)page_data[1], (unsigned char)page_data[2], (unsigned char)page_data[3]);
     }
 
     void DiskManager::FlushLog() {
@@ -190,71 +190,74 @@ namespace francodb {
         return GetFileSize(file_name_) / PAGE_SIZE;
     }
 
-    // --- NEW: SECURE METADATA I/O ---
 
+    
     void DiskManager::WriteMetadata(const std::string &data) {
-        // We use std::ofstream here because Metadata is variable length text, not fixed 4KB pages.
-        // However, we wrap it with a Magic Header for security.
-        
+        std::string temp_meta = meta_file_name_ + ".tmp";
         std::string data_to_write = data;
-        
-        // Encrypt metadata if encryption is enabled
+
         if (encryption_enabled_ && !encryption_key_.empty()) {
             std::vector<char> encrypted(data_to_write.begin(), data_to_write.end());
             Encryption::EncryptXOR(encryption_key_, encrypted.data(), encrypted.size());
-            data_to_write = std::string(encrypted.data(), encrypted.size());
-        }
-        
-        std::ofstream out(meta_file_name_, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) {
-            std::cerr << "[DISK] Error opening meta file for write: " << meta_file_name_ << std::endl;
-            return;
+            data_to_write.assign(encrypted.data(), encrypted.size());
         }
 
-        // 1. Write Magic Header (FRANCO_META)
+        std::ofstream out(temp_meta, std::ios::binary | std::ios::trunc);
         out.write(META_FILE_MAGIC, META_MAGIC_LEN);
-
-        // 2. Write Size
         size_t size = data_to_write.size();
         out.write(reinterpret_cast<const char*>(&size), sizeof(size));
-
-        // 3. Write Actual Data (encrypted if enabled)
         out.write(data_to_write.c_str(), size);
         out.close();
-        // Ensure metadata is durable
-        FlushLog();
+
+        // Force bits to physical platter
+        HANDLE hFile = CreateFileA(temp_meta.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            FlushFileBuffers(hFile);
+            CloseHandle(hFile);
+        }
+
+        // Atomic Swap
+        MoveFileExA(temp_meta.c_str(), meta_file_name_.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
     }
 
     bool DiskManager::ReadMetadata(std::string &data) {
+        // Check file size first
+        if (GetFileSize(meta_file_name_) <= (int)META_MAGIC_LEN) {
+            return false; 
+        }
+
         std::ifstream in(meta_file_name_, std::ios::binary);
         if (!in.is_open()) return false; 
 
-        // 1. Verify Magic Header
-        char magic[16];
-        std::memset(magic, 0, 16);
+        char magic[16] = {0};
         in.read(magic, META_MAGIC_LEN);
-        
+    
         if (std::memcmp(magic, META_FILE_MAGIC, META_MAGIC_LEN) != 0) {
             std::cerr << "[DISK] Invalid Meta File (Wrong Magic Header)!" << std::endl;
             return false;
         }
 
-        // 2. Read Size
-        size_t size;
+        size_t size = 0;
         in.read(reinterpret_cast<char*>(&size), sizeof(size));
+    
+        // Safety check against corrupted size values
+        if (size == 0 || size > 100 * 1024 * 1024) return false; 
 
-        // 3. Read Data
         std::vector<char> buffer(size);
         in.read(buffer.data(), size);
-        
-        // 4. Decrypt if encryption is enabled
+    
         if (encryption_enabled_ && !encryption_key_.empty()) {
             Encryption::DecryptXOR(encryption_key_, buffer.data(), buffer.size());
         }
-        
+    
         data.assign(buffer.data(), size);
         return true;
     }
     
-} // namespace francodb
-
+    // Helper to update checksum in a page buffer (excluding page 0, 1, 2)
+    void UpdatePageChecksum(char* page_data, uint32_t page_id) {
+        if (page_id <= 2) return;
+        uint32_t checksum = CalculateChecksum(page_data);
+        std::memcpy(page_data, &checksum, sizeof(uint32_t));
+    }
+}

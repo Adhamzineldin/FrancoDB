@@ -44,7 +44,16 @@ namespace francodb {
         }
 
         inline void ResetMemory() {
-            std::memset(data_, 0, PAGE_SIZE);
+            // Only zero out after the checksum (first 4 bytes)
+            // But for page 0 (meta), zero the whole page
+            // Also, for INVALID_PAGE_ID, zero the whole page (newly allocated pages)
+            if (page_id_ == 0 || page_id_ == INVALID_PAGE_ID) {
+                std::memset(data_, 0, PAGE_SIZE);
+            } else {
+                // Always zero the checksum field as well for new pages
+                std::memset(data_, 0, 4);
+                std::memset(data_ + 4, 0, PAGE_SIZE - 4);
+            }
         }
 
         // --- NEW: LATCHING METHODS ---

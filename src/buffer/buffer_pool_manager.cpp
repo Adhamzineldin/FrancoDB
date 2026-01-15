@@ -3,6 +3,7 @@
 #include "buffer/clock_replacer.h"
 #include "common/config.h"
 #include "storage/page/free_page_manager.h"
+#include "storage/disk/disk_manager.h"
 
 namespace francodb {
     BufferPoolManager::BufferPoolManager(size_t pool_size, DiskManager *disk_manager)
@@ -164,6 +165,8 @@ namespace francodb {
         if (page_table_.find(page_id) == page_table_.end()) return false;
         frame_id_t frame_id = page_table_[page_id];
         Page *page = &pages_[frame_id];
+        // Update checksum before writing
+        UpdatePageChecksum(page->GetData(), page_id);
         disk_manager_->WritePage(page_id, page->GetData());
         page->SetDirty(false);
         return true;
@@ -187,6 +190,8 @@ namespace francodb {
             if (page_id == 0) continue; // Never flush or write page 0
             Page *page = &pages_[frame_id];
             if (page->IsDirty()) {
+                // Update checksum before writing
+                UpdatePageChecksum(page->GetData(), page_id);
                 disk_manager_->WritePage(page_id, page->GetData());
                 page->SetDirty(false);
             }
