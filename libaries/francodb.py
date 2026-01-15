@@ -25,6 +25,13 @@ class Cursor:
     def __init__(self, connection):
         self._conn = connection
         self._last_result = None
+        self.last_raw_bytes = b''  # <--- NEW: Stores raw hex data
+
+    def _recv_captured(self, n):
+        """Helper: Reads n bytes from socket AND saves them to buffer."""
+        data = self._conn.sock.recv(n)
+        self.last_raw_bytes += data
+        return data
 
     def execute(self, fql: str, mode: str = 'text') -> Union[str, List, Dict]:
         """
@@ -33,6 +40,9 @@ class Cursor:
         """
         if not self._conn.is_connected():
             raise OperationalError("Database is not connected")
+
+        # Clear previous capture
+        self.last_raw_bytes = b''
 
         # 1. Select Protocol
         msg_type = CMD_TEXT
@@ -58,11 +68,9 @@ class Cursor:
     def _read_text_response(self) -> str:
         """Standard text/json reader."""
         try:
-            # In a real driver, we'd read the length header first.
-            # Assuming simple blocking read for now:
-            response = self._conn.sock.recv(65536).decode('utf-8').strip()
+            # We use _recv_captured even for text so we can debug it if needed
+            response = self._recv_captured(65536).decode('utf-8').strip()
             if "ERROR" in response and not response.startswith("{"):
-                # Basic text error check
                 raise QueryError(response)
             return response
         except socket.timeout:
@@ -71,38 +79,37 @@ class Cursor:
     def _read_binary_response(self):
         """
         Unpacks the Professional Binary Protocol from C++.
+        Now uses _recv_captured to store the raw hex trace.
         """
-        sock = self._conn.sock
         try:
             # 1. Read Response Type (1 Byte)
-            # We use recv(1) and get the ordinal value
-            type_byte = sock.recv(1)
+            type_byte = self._recv_captured(1)
             if not type_byte: return None
             resp_type = type_byte[0]
 
             # --- CASE: ERROR (0xFF) ---
             if resp_type == 0xFF:
-                msg_len = struct.unpack('!I', sock.recv(4))[0]
-                error_msg = sock.recv(msg_len).decode('utf-8')
+                msg_len = struct.unpack('!I', self._recv_captured(4))[0]
+                error_msg = self._recv_captured(msg_len).decode('utf-8')
                 raise QueryError(f"Server Error: {error_msg}")
 
             # --- CASE: SIMPLE MESSAGE (0x01) ---
             elif resp_type == 0x01:
-                msg_len = struct.unpack('!I', sock.recv(4))[0]
-                return sock.recv(msg_len).decode('utf-8')
+                msg_len = struct.unpack('!I', self._recv_captured(4))[0]
+                return self._recv_captured(msg_len).decode('utf-8')
 
             # --- CASE: TABLE DATA (0x02) ---
             elif resp_type == 0x02:
                 # A. Read Metadata
-                num_cols = struct.unpack('!I', sock.recv(4))[0]
-                num_rows = struct.unpack('!I', sock.recv(4))[0]
+                num_cols = struct.unpack('!I', self._recv_captured(4))[0]
+                num_rows = struct.unpack('!I', self._recv_captured(4))[0]
 
                 # B. Read Columns
                 columns = []
                 for _ in range(num_cols):
-                    col_type = sock.recv(1)[0] # 1 byte type
-                    name_len = struct.unpack('!I', sock.recv(4))[0]
-                    col_name = sock.recv(name_len).decode('utf-8')
+                    col_type = self._recv_captured(1)[0] # 1 byte type
+                    name_len = struct.unpack('!I', self._recv_captured(4))[0]
+                    col_name = self._recv_captured(name_len).decode('utf-8')
                     columns.append(col_name)
 
                 # C. Read Rows
@@ -110,12 +117,11 @@ class Cursor:
                 for _ in range(num_rows):
                     row_data = []
                     for _ in range(num_cols):
-                        # Currently C++ sends everything as String (Type 2)
-                        # So we read: [Len][String]
-                        val_len = struct.unpack('!I', sock.recv(4))[0]
-                        val_str = sock.recv(val_len).decode('utf-8')
+                        # C++ sends everything as String (Type 2) currently
+                        val_len = struct.unpack('!I', self._recv_captured(4))[0]
+                        val_str = self._recv_captured(val_len).decode('utf-8')
 
-                        # Try to convert to int/float if it looks like one (Optional polish)
+                        # Auto-convert numbers
                         if val_str.isdigit():
                             row_data.append(int(val_str))
                         else:
@@ -123,7 +129,6 @@ class Cursor:
 
                     result_rows.append(row_data)
 
-                # Return list of lists (or list of dicts if you prefer)
                 return result_rows
 
         except Exception as e:
