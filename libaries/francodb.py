@@ -16,7 +16,7 @@ class QueryError(FrancoDBError): pass
 CMD_TEXT   = b'Q'
 CMD_JSON   = b'J'
 CMD_BINARY = b'B'
-HEADER_STRUCT = struct.Struct('!cI') 
+HEADER_STRUCT = struct.Struct('!cI')
 
 # ==========================================
 # 3. CURSOR CLASS
@@ -45,13 +45,13 @@ class Cursor:
 
         try:
             self._conn.sock.sendall(header + payload_bytes)
-            
+
             # 3. Read Response based on Mode
             if mode == 'binary':
                 return self._read_binary_response()
             else:
                 return self._read_text_response()
-                
+
         except socket.error as e:
             raise OperationalError(f"Network error: {e}")
 
@@ -61,7 +61,7 @@ class Cursor:
             # In a real driver, we'd read the length header first.
             # Assuming simple blocking read for now:
             response = self._conn.sock.recv(65536).decode('utf-8').strip()
-            if "ERROR" in response and not response.startswith("{"): 
+            if "ERROR" in response and not response.startswith("{"):
                 # Basic text error check
                 raise QueryError(response)
             return response
@@ -114,13 +114,13 @@ class Cursor:
                         # So we read: [Len][String]
                         val_len = struct.unpack('!I', sock.recv(4))[0]
                         val_str = sock.recv(val_len).decode('utf-8')
-                        
+
                         # Try to convert to int/float if it looks like one (Optional polish)
                         if val_str.isdigit():
                             row_data.append(int(val_str))
                         else:
                             row_data.append(val_str)
-                            
+
                     result_rows.append(row_data)
 
                 # Return list of lists (or list of dicts if you prefer)
