@@ -7,15 +7,20 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter")
 set(SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 set(TEST_DIR "${CMAKE_SOURCE_DIR}/test")
 
-# 1. LIBRARY
+# =========================================================
+# 1. CORE LIBRARY (The Engine)
+# =========================================================
 file(GLOB_RECURSE FRANCODB_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.cpp")
 file(GLOB_RECURSE FRANCODB_HEADERS CONFIGURE_DEPENDS "${SRC_DIR}/include/*.h")
+# Exclude main() files from the library to avoid "multiple definition of main" errors
 list(FILTER FRANCODB_SOURCES EXCLUDE REGEX ".*/src/cmd/.*")
 
 add_library(francodb_lib ${FRANCODB_SOURCES} ${FRANCODB_HEADERS})
 target_include_directories(francodb_lib PUBLIC "${SRC_DIR}/include")
 
-# 2. SERVER
+# =========================================================
+# 2. SERVER EXECUTABLE
+# =========================================================
 set(SERVER_SRC "${SRC_DIR}/cmd/server/main.cpp")
 if(EXISTS "${SERVER_SRC}")
     add_executable(francodb_server "${SERVER_SRC}")
@@ -27,7 +32,9 @@ if(EXISTS "${SERVER_SRC}")
     endif()
 endif()
 
-# 3. SHELL
+# =========================================================
+# 3. SHELL EXECUTABLE (CLI)
+# =========================================================
 set(SHELL_SRC "${SRC_DIR}/cmd/shell/shell.cpp")
 if(EXISTS "${SHELL_SRC}")
     add_executable(francodb_shell "${SHELL_SRC}")
@@ -39,7 +46,9 @@ if(EXISTS "${SHELL_SRC}")
     endif()
 endif()
 
-# 4. SETUP
+# =========================================================
+# 4. UTILITIES (Setup & Service)
+# =========================================================
 set(SETUP_SRC "${SRC_DIR}/cmd/setup/setup.cpp")
 if(EXISTS "${SETUP_SRC}")
     add_executable(francodb_setup "${SETUP_SRC}")
@@ -50,7 +59,6 @@ if(EXISTS "${SETUP_SRC}")
     endif()
 endif()
 
-# 5. SERVICE
 set(SERVICE_SRC "${SRC_DIR}/cmd/service/service_wrapper.cpp")
 if(WIN32 AND EXISTS "${SERVICE_SRC}")
     add_executable(francodb_service "${SERVICE_SRC}")
@@ -58,31 +66,27 @@ if(WIN32 AND EXISTS "${SERVICE_SRC}")
     target_link_libraries(francodb_service advapi32)
 endif()
 
-# 6. TESTS
+# =========================================================
+# 5. TESTS (Delegate to test/ folder)
+# =========================================================
 if(EXISTS "${TEST_DIR}")
     add_subdirectory(test)
 endif()
 
 # =========================================================
-# 7. AUTOMATIC DLL COPY (The Magic Fix)
+# 6. WINDOWS DLL AUTO-COPY (Fixes "Missing DLL" errors)
 # =========================================================
 if(WIN32)
-    # Get the folder where g++.exe lives (e.g., C:/msys64/mingw64/bin)
     get_filename_component(COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
-
-    # Find the critical DLLs in that folder automatically
-    # This works regardless of version numbers (libstdc++-6 vs libstdc++-7)
     file(GLOB RUNTIME_DLLS
             "${COMPILER_BIN_DIR}/libstdc++-*.dll"
             "${COMPILER_BIN_DIR}/libgcc_s_*.dll"
             "${COMPILER_BIN_DIR}/libwinpthread-*.dll"
     )
-
-    # Create a post-build command to copy them to the build folder
     add_custom_command(TARGET francodb_server POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${RUNTIME_DLLS}
             $<TARGET_FILE_DIR:francodb_server>
-            COMMENT "Auto-copying MinGW Runtime DLLs to build folder..."
+            COMMENT "Auto-copying MinGW Runtime DLLs..."
     )
 endif()
