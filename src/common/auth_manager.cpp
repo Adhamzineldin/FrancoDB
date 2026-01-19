@@ -77,10 +77,10 @@ namespace francodb {
         // 1. Create 'franco_users' table if missing
         if (system_catalog_->GetTable("franco_users") == nullptr) {
             std::vector<Column> user_cols;
-            user_cols.emplace_back("username", TypeId::VARCHAR, 64, true);
-            user_cols.emplace_back("password_hash", TypeId::VARCHAR, 128, false);
-            user_cols.emplace_back("db_name", TypeId::VARCHAR, 64, false); // Scope
-            user_cols.emplace_back("role", TypeId::VARCHAR, 16, false);    // Permission
+            user_cols.emplace_back("username", TypeId::VARCHAR, static_cast<uint32_t>(64), true);
+            user_cols.emplace_back("password_hash", TypeId::VARCHAR, static_cast<uint32_t>(128), false);
+            user_cols.emplace_back("db_name", TypeId::VARCHAR, static_cast<uint32_t>(64), false); // Scope
+            user_cols.emplace_back("role", TypeId::VARCHAR, static_cast<uint32_t>(16), false);    // Permission
             Schema user_schema(user_cols);
 
             if (system_catalog_->CreateTable("franco_users", user_schema) == nullptr) {
