@@ -1,73 +1,73 @@
-# 1. Enable Testing Dashboard
+# =========================================================
+# FrancoDB Test Suite - CMake Configuration
+# Build: cmake --build . --target run_all_tests
+# Run:   ctest -R ComprehensiveTestSuite --output-on-failure
+# =========================================================
+
 enable_testing()
 
-# 2. Dynamically find all .cpp files inside test/ (and subdirectories like test/storage/)
-file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
-        "*.cpp"
+include_directories(${CMAKE_CURRENT_LIST_DIR}/framework)
+
+# =========================================================
+# COMPREHENSIVE TEST SUITE - Single Executable
+# =========================================================
+
+set(TEST_SUITE_SOURCES
+    run_all_tests.cpp
+        execution/column_tests.cpp
+        execution/join_tests.cpp
+        execution/foreign_key_tests.cpp
+        execution/groupby_tests.cpp
+        execution/orderby_tests.cpp
+        execution/limit_distinct_tests.cpp
+    modules/module_tests_stub.cpp
 )
 
-# 3. Loop through each file and create a separate test executable
+add_executable(run_all_tests ${TEST_SUITE_SOURCES})
+target_link_libraries(run_all_tests PRIVATE francodb_lib)
+target_include_directories(run_all_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/include ${CMAKE_CURRENT_LIST_DIR}/framework)
+
+# Register with CTest
+add_test(NAME ComprehensiveTestSuite COMMAND run_all_tests)
+set_tests_properties(ComprehensiveTestSuite PROPERTIES
+    TIMEOUT 60
+    LABELS "comprehensive;sql;s_plus"
+)
+
+# =========================================================
+# INDIVIDUAL MODULE TESTS (Auto-discovered)
+# =========================================================
+
+file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS "*.cpp")
+
+# Exclude comprehensive test suite files
+list(FILTER TEST_SOURCES EXCLUDE REGEX ".*(run_all_tests|column_tests|join_tests|foreign_key_tests|groupby_tests|orderby_tests|limit_distinct_tests|module_tests_stub)\\.cpp$")
+
 foreach(test_source ${TEST_SOURCES})
-    # Extract the filename without extension (e.g., "storage/disk_test.cpp" -> "disk_test")
     get_filename_component(test_name ${test_source} NAME_WE)
-
-    # Create the executable (e.g., bin/disk_test)
-    add_executable(${test_name} ${test_source}
-    )
-
-    # Link it to your database library
+    add_executable(${test_name} ${test_source})
     target_link_libraries(${test_name} PRIVATE francodb_lib)
-
-    # Register it with CTest so you can run "ctest"
+    target_include_directories(${test_name} PRIVATE ${CMAKE_SOURCE_DIR}/src/include ${CMAKE_CURRENT_LIST_DIR}/framework)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
-
 # =========================================================
-# 1. UNIT TESTS
-# =========================================================
-
-# Thread Pool Test
-# Assuming you put the threadpool test in src/cmd/test/threadpool_test.cpp based on previous steps
-# If it is in test/unit/threadpool_test.cpp, adjust the path below.
-set(THREADPOOL_TEST_SRC "${CMAKE_SOURCE_DIR}/src/cmd/test/threadpool_test.cpp")
-
-if(EXISTS "${THREADPOOL_TEST_SRC}")
-    add_executable(test_threadpool "${THREADPOOL_TEST_SRC}")
-    target_link_libraries(test_threadpool francodb_lib)
-    if(WIN32)
-        target_link_libraries(test_threadpool ws2_32)
-    else()
-        target_link_libraries(test_threadpool pthread)
-    endif()
-endif()
-
-
-# =========================================================
-# 2. SYSTEM / STRESS TESTS
+# CUSTOM TARGETS
 # =========================================================
 
-# Stress Client
-# Assumes file is at: test/system/stress_client.cpp
-#set(STRESS_CLIENT_SRC "${CMAKE_CURRENT_SOURCE_DIR}/system/stress_client.cpp")
-#
-#if(EXISTS "${STRESS_CLIENT_SRC}")
-#    add_executable(stress_client "${STRESS_CLIENT_SRC}")
-#
-#    # Link to FrancoDB lib (if you use its headers)
-#    target_link_libraries(stress_client francodb_lib)
-#
-#    # CRITICAL FIX: Link Windows Sockets
-#    if(WIN32)
-#        target_link_libraries(stress_client ws2_32)
-#    else()
-#        target_link_libraries(stress_client pthread)
-#    endif()
-#endif()
-#
-#
-#add_executable(consistency_client system/consistency_client.cpp)
-#if(WIN32)
-#    target_link_libraries(consistency_client PRIVATE ws2_32)
-#endif()
-#target_link_libraries(consistency_client PRIVATE francodb_lib)
+add_custom_target(test_quick
+    COMMAND ${CMAKE_CTEST_COMMAND} -R ComprehensiveTestSuite --output-on-failure
+    DEPENDS run_all_tests
+    COMMENT "Running comprehensive test suite..."
+)
+
+add_custom_target(test_all
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    COMMENT "Running all tests..."
+)
+
+add_custom_target(test_verbose
+    COMMAND ${CMAKE_CTEST_COMMAND} -R ComprehensiveTestSuite -V
+    DEPENDS run_all_tests
+    COMMENT "Running tests with verbose output..."
+)
