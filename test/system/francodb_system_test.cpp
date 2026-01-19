@@ -9,6 +9,7 @@
 #include "catalog/catalog.h"
 #include "parser/parser.h"
 #include "execution/execution_engine.h"
+#include "common/auth_manager.h"
 
 using namespace francodb;
 
@@ -22,7 +23,7 @@ void RunSQL(ExecutionEngine &engine, const std::string &sql, bool expect_error =
         Parser parser(std::move(lexer));
         auto stmt = parser.ParseQuery();
         if (stmt) {
-            engine.Execute(stmt.get());
+            engine.Execute(stmt.get(), nullptr);
         }
         if (expect_error) {
             std::cout << "  [FAIL] Expected error but operation succeeded: " << sql << std::endl;
@@ -324,7 +325,8 @@ void TestDataPersistence(const std::string &db_file) {
     auto *disk_manager2 = new DiskManager(db_file);
     auto *bpm2 = new BufferPoolManager(50, disk_manager2);
     auto *catalog2 = new Catalog(bpm2);
-    ExecutionEngine engine2(bpm2, catalog2);
+    auto *auth_manager2 = new AuthManager(bpm2, catalog2);
+    ExecutionEngine engine2(bpm2, catalog2, auth_manager2);
     
     // Verify data persisted
     std::cout << "[10.2] Verifying data persisted after restart..." << std::endl;
@@ -398,7 +400,7 @@ void TestMultipleTables(ExecutionEngine &engine) {
 // ============================================================================
 // MAIN TEST RUNNER
 // ============================================================================
-int main() {
+void TestFrancoDBSystem() {
     std::string db_file = "francodb_system_test.francodb";
     
     // Clean up old test files
@@ -417,7 +419,8 @@ int main() {
     auto *disk_manager = new DiskManager(db_file);
     auto *bpm = new BufferPoolManager(50, disk_manager);
     auto *catalog = new Catalog(bpm);
-    ExecutionEngine engine(bpm, catalog);
+    auto *auth_manager = new AuthManager(bpm, catalog);
+    ExecutionEngine engine(bpm, catalog, auth_manager);
     
     try {
         // Run all test suites
@@ -449,13 +452,13 @@ int main() {
             delete catalog;
             delete bpm;
             delete disk_manager;
-            return 0;
+            
         } else {
             std::cout << "\n[FAILURE] Some tests failed. Please review the output above." << std::endl;
             delete catalog;
             delete bpm;
             delete disk_manager;
-            return 1;
+            
         }
         
     } catch (const std::exception &e) {
@@ -463,7 +466,7 @@ int main() {
         delete catalog;
         delete bpm;
         delete disk_manager;
-        return 1;
+        
     }
 }
 

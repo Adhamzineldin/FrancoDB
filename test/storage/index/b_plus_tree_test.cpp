@@ -14,7 +14,7 @@
 using namespace francodb;
 
 // Helper to create a GenericKey from an integer
-GenericKey<8> MakeKey(int n) {
+static GenericKey<8> MakeKey(int n) {
     GenericKey<8> k;
     Value v(TypeId::INTEGER, n);
     k.SetFromValue(v);
@@ -81,7 +81,7 @@ void TestSinglePageTree() {
     std::cout << "[SUCCESS] Single Page Tree works!" << std::endl;
 }
 
-int main() {
+void TestBPlusTree() {
     TestSinglePageTree();
-    return 0;
+    
 }

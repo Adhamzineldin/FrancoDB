@@ -23,11 +23,11 @@ const int OPS_PER_THREAD = 100; // Lower count, but higher quality checks
 
 const char CMD_TEXT = 'Q';
 
-std::atomic<int> success_count{0};
+static std::atomic<int> success_count{0};
 std::atomic<int> data_errors{0};
 std::mutex log_mutex;
 
-void Log(const std::string& msg) {
+static void Log(const std::string& msg) {
     std::lock_guard<std::mutex> lock(log_mutex);
     std::cout << msg << std::endl;
 }
@@ -124,7 +124,7 @@ void Worker(int thread_id) {
     client.Close();
 }
 
-int main() {
+void TestConsistencyClient() {
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
     Log("=== FRANCODB DATA INTEGRITY TEST ===");
@@ -154,5 +154,5 @@ int main() {
     Log("Data Corruptions:  " + std::to_string(data_errors));
 
     WSACleanup();
-    return 0;
+    
 }

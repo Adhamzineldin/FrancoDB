@@ -16,7 +16,7 @@
 using namespace francodb;
 
 // --- HELPERS ---
-GenericKey<8> MakeKey(int n) {
+static GenericKey<8> MakeKey(int n) {
     GenericKey<8> k;
     Value v(TypeId::INTEGER, n);
     k.SetFromValue(v);
@@ -145,10 +145,10 @@ void TestMixedReadWrite() {
     delete disk_manager;
 }
 
-int main() {
+void TestBPlusTreeConcurrent() {
     // 5 Threads, 500 keys each = 2500 insertions
     TestConcurrentInsert(5, 500);
     
     TestMixedReadWrite();
-    return 0;
+    
 }

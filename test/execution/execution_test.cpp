@@ -7,10 +7,11 @@
 #include "catalog/catalog.h"
 #include "parser/parser.h"
 #include "execution/execution_engine.h"
+#include "common/auth_manager.h"
 
 using namespace francodb;
 
-void RunQuery(ExecutionEngine &engine, const std::string &sql) {
+static void RunQuery(ExecutionEngine &engine, const std::string &sql) {
     std::cout << "SQL: " << sql << std::endl;
     
     // 1. Lex & Parse
@@ -19,17 +20,18 @@ void RunQuery(ExecutionEngine &engine, const std::string &sql) {
     auto stmt = parser.ParseQuery();
     
     // 2. Execute
-    engine.Execute(stmt.get());
+    engine.Execute(stmt.get(), nullptr);
 }
 
-int main() {
+void TestExecutionEngine() {
     // 1. Setup Storage Engine
     auto *disk_manager = new DiskManager("francodb.francodb");
     auto *bpm = new BufferPoolManager(50, disk_manager); // 50 pages memory
     auto *catalog = new Catalog(bpm);
+    auto *auth_manager = new AuthManager(bpm, catalog);
     
     // 2. Start Execution Engine
-    ExecutionEngine engine(bpm, catalog);
+    ExecutionEngine engine(bpm, catalog, auth_manager);
 
     try {
         std::cout << "--- STARTING FRANCO DB ENGINE ---" << std::endl;
@@ -82,13 +84,15 @@ int main() {
 
     } catch (const Exception &e) {
         std::cerr << "CRITICAL ERROR: " << e.what() << std::endl;
-        return 1;
+        throw;
     }
 
     // Cleanup
+    delete auth_manager;
     delete catalog;
     delete bpm;
     delete disk_manager;
-    // remove("francodb.francodb"); // Clean up disk file
-    return 0;
 }
+
+
+

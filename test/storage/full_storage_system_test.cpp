@@ -25,7 +25,7 @@ void TestFullSystem() {
     // 2. CREATE TABLE users (id RAKAM, name GOMLA, points RAKAM)
     std::vector<Column> cols;
     cols.emplace_back("id", TypeId::INTEGER);
-    cols.emplace_back("name", TypeId::VARCHAR, 0);
+    cols.emplace_back("name", TypeId::VARCHAR, (uint32_t)0);
     cols.emplace_back("points", TypeId::INTEGER);
     Schema schema(cols);
 
@@ -113,7 +113,3 @@ void TestFullSystem() {
     
 }
 
-int main() {
-    TestFullSystem();
-    return 0;
-}

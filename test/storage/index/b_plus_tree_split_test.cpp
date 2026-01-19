@@ -64,7 +64,7 @@ void TestSplitTree() {
     std::cout << "[SUCCESS] B+ Tree Split Test Passed!" << std::endl;
 }
 
-int main() {
+void TestBPlusTreeSplit() {
     TestSplitTree();
-    return 0;
+    
 }

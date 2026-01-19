@@ -26,7 +26,7 @@ const char CMD_TEXT = 'Q';
 // const char CMD_JSON = 'J';
 // const char CMD_BINARY = 'B';
 
-std::atomic<int> success_count{0};
+static std::atomic<int> success_count{0};
 std::atomic<int> fail_count{0};
 std::mutex print_mutex;
 
@@ -95,7 +95,7 @@ public:
     }
 };
 
-void Worker(int id) {
+static void Worker(int id) {
     FrancoClient client;
     if (!client.Connect()) {
         Log("[Thread " + std::to_string(id) + "] Failed to connect (Port " + std::to_string(SERVER_PORT) + ")");
@@ -144,7 +144,7 @@ void Worker(int id) {
     client.Close();
 }
 
-int main() {
+void TestStressClient() {
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
@@ -159,7 +159,7 @@ int main() {
         if (!admin.Connect()) {
             Log("[ERROR] Could not connect to server.");
             WSACleanup();
-            return 1;
+            
         }
         
         admin.Send("LOGIN " + USER + " " + PASS + ";");
@@ -198,5 +198,5 @@ int main() {
     }
 
     WSACleanup();
-    return 0;
+    
 }

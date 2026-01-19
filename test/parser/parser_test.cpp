@@ -109,7 +109,3 @@ void TestParser() {
     std::cout << "========================================" << std::endl;
 }
 
-int main() {
-    TestParser();
-    return 0;
-}

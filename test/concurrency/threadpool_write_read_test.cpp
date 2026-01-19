@@ -45,7 +45,7 @@ struct Bank {
     }
 };
 
-void TestBasicExecution() {
+void TestBasicExecutionRW() {
     std::cout << "[1/4] Testing Basic Execution..." << std::endl;
     ThreadPool pool(4);
     auto future = pool.Enqueue([](int a, int b) { return a + b; }, 10, 20);
@@ -54,7 +54,7 @@ void TestBasicExecution() {
     else std::cerr << "  -> FAILED: Expected 30, got " << result << "\n";
 }
 
-void TestMassiveConcurrency() {
+void TestMassiveConcurrencyRW() {
     int task_count = 10000;
     std::cout << "[2/4] Testing Task Throughput (" << task_count << " tasks)..." << std::endl;
     ThreadPool pool(4);
@@ -129,7 +129,7 @@ void TestReadWriteMix() {
     }
 }
 
-void TestShutdown() {
+void TestShutdownRW() {
     std::cout << "[4/4] Testing Clean Shutdown..." << std::endl;
     {
         ThreadPool pool(4);
@@ -138,14 +138,4 @@ void TestShutdown() {
     std::cout << "  -> SUCCESS.\n";
 }
 
-int main() {
-    std::cout << "=== FRANCODB THREAD POOL STRESS TEST (THREAD-SAFE) ===\n";
-    
-    TestBasicExecution();
-    TestMassiveConcurrency();
-    TestReadWriteMix();
-    TestShutdown();
-    
-    std::cout << "\nALL SYSTEMS GREEN.\n";
-    return 0;
-}
+

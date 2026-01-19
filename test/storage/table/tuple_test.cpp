@@ -15,7 +15,7 @@ void TestTuplePacking() {
     // 1. Define the Schema: (ID: INT, Name: GOMLA/VARCHAR, IsActive: BOOL)
     std::vector<Column> cols;
     cols.emplace_back("id", TypeId::INTEGER);
-    cols.emplace_back("name", TypeId::VARCHAR, 0); // Length 0 because it's dynamic
+    cols.emplace_back("name", TypeId::VARCHAR, (uint32_t)0); // Length 0 because it's dynamic
     cols.emplace_back("is_active", TypeId::BOOLEAN);
 
     Schema schema(cols);
@@ -59,7 +59,3 @@ void TestTuplePacking() {
     std::cout << "[SUCCESS] Tuple Packing logic is solid!" << std::endl;
 }
 
-int main() {
-    TestTuplePacking();
-    return 0;
-}

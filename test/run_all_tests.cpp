@@ -4,12 +4,10 @@
 /**
  * FrancoDB Comprehensive Test Suite
  * Single entry point to run ALL tests for ALL modules
- * Shows pass/fail results with timing
  */
 
 namespace francodb_test {
-
-// Forward declarations of test modules
+// SQL Feature Tests
 void RunColumnTests(TestRunner& runner);
 void RunJoinTests(TestRunner& runner);
 void RunForeignKeyTests(TestRunner& runner);
@@ -18,41 +16,112 @@ void RunOrderByTests(TestRunner& runner);
 void RunLimitTests(TestRunner& runner);
 void RunDistinctTests(TestRunner& runner);
 void RunModuleStubs(TestRunner& runner);
-
+void RunAllIntegrationTests(TestRunner& runner);
+void RunBufferPoolTests(TestRunner& runner);
 } // namespace francodb_test
+
+// Storage & System Tests
+void TestTuplePacking();
+void TestTableHeap();
+void TestDiskRecycling();
+void TestFullSystem();
+void TestDiskPersistence();
+void TestBPlusTree();
+void TestBPlusTreeSplit();
+void TestBPlusTreeConcurrent();
+
+// Execution & Parser Tests  
+void TestExecutionEngine();
+void TestIndexExecution();
+void TestLexer();
+void TestParser();
+
+// Concurrency Tests
+void TestBasicExecution();
+void TestMassiveConcurrency();
+void TestShutdown();
+void TestBasicExecutionRW();
+void TestMassiveConcurrencyRW();
+void TestShutdownRW();
+void TestReadWriteMix();
+void TestRealWorldTraffic();
+
+// System Tests
+void TestFrancoDBSystem();
+void TestConsistencyClient();
+void TestStressClient();
 
 int main(int, char**) {
     using namespace francodb_test;
-
+    
     std::cout << "========================================" << std::endl;
-    std::cout << "  FrancoDB Comprehensive Test Suite" << std::endl;
-    std::cout << "  All modules, one command" << std::endl;
+    std::cout << "  FrancoDB COMPREHENSIVE TEST SUITE" << std::endl;
+    std::cout << "  ALL MODULES | ALL FEATURES | S+ GRADE" << std::endl;
     std::cout << "========================================\n" << std::endl;
 
     TestRunner runner;
 
-    std::cout << "\n[1/7] Column Constraint Tests..." << std::endl;
+    // SQL FEATURES
+    std::cout << "\n╔═══ SQL FEATURES ═══╗" << std::endl;
     RunColumnTests(runner);
-
-    std::cout << "\n[2/7] JOIN Tests..." << std::endl;
     RunJoinTests(runner);
-
-    std::cout << "\n[3/7] Foreign Key Tests..." << std::endl;
     RunForeignKeyTests(runner);
-
-    std::cout << "\n[4/7] GROUP BY Tests..." << std::endl;
     RunGroupByTests(runner);
-
-    std::cout << "\n[5/7] ORDER BY Tests..." << std::endl;
     RunOrderByTests(runner);
-
-    std::cout << "\n[6/7] LIMIT/DISTINCT Tests..." << std::endl;
     RunLimitTests(runner);
     RunDistinctTests(runner);
 
-    std::cout << "\n[7/7] Core Module Smoke Tests..." << std::endl;
+    // CORE MODULES
+    std::cout << "\n╔═══ CORE MODULES ═══╗" << std::endl;
     RunModuleStubs(runner);
+
+    // BUFFER & STORAGE
+    std::cout << "\n╔═══ BUFFER & STORAGE ═══╗" << std::endl;
+    RunBufferPoolTests(runner);
+    runner.RunTest("Storage", "Tuple Packing", [] { TestTuplePacking(); });
+    runner.RunTest("Storage", "Table Heap", [] { TestTableHeap(); });
+    runner.RunTest("Storage", "Disk Recycling", [] { TestDiskRecycling(); });
+    runner.RunTest("Storage", "Full Storage System", [] { TestFullSystem(); });
+    runner.RunTest("Storage", "Disk Persistence", [] { TestDiskPersistence(); });
+    
+    // B+ TREE TESTS
+    std::cout << "\n╔═══ B+ TREE INDEX ═══╗" << std::endl;
+    runner.RunTest("Index", "B+ Tree Basic", [] { TestBPlusTree(); });
+    runner.RunTest("Index", "B+ Tree Split", [] { TestBPlusTreeSplit(); });
+    runner.RunTest("Index", "B+ Tree Concurrent", [] { TestBPlusTreeConcurrent(); });
+
+    // EXECUTION ENGINE
+    std::cout << "\n╔═══ EXECUTION ENGINE ═══╗" << std::endl;
+    runner.RunTest("Execution", "Basic Execution", [] { TestExecutionEngine(); });
+    runner.RunTest("Execution", "Index Execution", [] { TestIndexExecution(); });
+
+    // PARSER
+    std::cout << "\n╔═══ PARSER ═══╗" << std::endl;
+    runner.RunTest("Parser", "Lexer", [] { TestLexer(); });
+    runner.RunTest("Parser", "Parser", [] { TestParser(); });
+
+    // CONCURRENCY
+    std::cout << "\n╔═══ CONCURRENCY ═══╗" << std::endl;
+    runner.RunTest("Concurrency", "Thread Pool Basic", [] { TestBasicExecution(); });
+    runner.RunTest("Concurrency", "Thread Pool Massive", [] { TestMassiveConcurrency(); });
+    runner.RunTest("Concurrency", "Thread Pool Shutdown", [] { TestShutdown(); });
+    runner.RunTest("Concurrency", "Thread Pool Basic RW", [] { TestBasicExecutionRW(); });
+    runner.RunTest("Concurrency", "Thread Pool Massive RW", [] { TestMassiveConcurrencyRW(); });
+    runner.RunTest("Concurrency", "Thread Pool Shutdown RW", [] { TestShutdownRW(); });
+    runner.RunTest("Concurrency", "Read/Write Mix", [] { TestReadWriteMix(); });
+    runner.RunTest("Concurrency", "Real World Traffic", [] { TestRealWorldTraffic(); });
+
+    // SYSTEM TESTS
+    std::cout << "\n╔═══ SYSTEM TESTS ═══╗" << std::endl;
+    runner.RunTest("System", "FrancoDB System", [] { TestFrancoDBSystem(); });
+    runner.RunTest("System", "Consistency Client", [] { TestConsistencyClient(); });
+    runner.RunTest("System", "Stress Client", [] { TestStressClient(); });
+
+    // INTEGRATION
+    std::cout << "\n╔═══ INTEGRATION ═══╗" << std::endl;
+    RunAllIntegrationTests(runner);
 
     runner.PrintSummary();
     return runner.GetExitCode();
 }
+

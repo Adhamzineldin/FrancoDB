@@ -12,6 +12,7 @@
 #include "catalog/catalog.h"
 #include "parser/parser.h"
 #include "execution/execution_engine.h"
+#include "common/auth_manager.h"
 
 using namespace francodb;
 
@@ -27,7 +28,7 @@ void RunSQL(ExecutionEngine &engine, const std::string &sql) {
         Lexer lexer(sql);
         Parser parser(std::move(lexer));
         auto stmt = parser.ParseQuery();
-        if (stmt) engine.Execute(stmt.get());
+        if (stmt) engine.Execute(stmt.get(), nullptr);
     } catch (const std::exception &e) {
         // Errors are okay in stress tests (deadlocks/duplicates), but we catch them to prevent crashes
     }
@@ -35,17 +36,20 @@ void RunSQL(ExecutionEngine &engine, const std::string &sql) {
 
 // PHASE 1: POPULATE (Insert only)
 void PopulationWorker(int id, int count) {
-    ExecutionEngine engine(g_bpm, g_catalog);
+    auto *auth_manager = new AuthManager(g_bpm, g_catalog);
+    ExecutionEngine engine(g_bpm, g_catalog, auth_manager);
     for (int i = 0; i < count; i++) {
         int user_id = (id * 1000) + i;
         std::string sql = "EMLA GOWA users ELKEYAM (" + std::to_string(user_id) + ", 'User" + std::to_string(user_id) + "');";
         RunSQL(engine, sql);
     }
+    delete auth_manager;
 }
 
 // PHASE 2: STRESS (Update/Delete/Select)
 void StressWorker(int id, int num_ops, int max_users) {
-    ExecutionEngine engine(g_bpm, g_catalog);
+    auto *auth_manager = new AuthManager(g_bpm, g_catalog);
+    ExecutionEngine engine(g_bpm, g_catalog, auth_manager);
     std::mt19937 rng(id + 999);
     std::uniform_int_distribution<int> dist(0, 2); // 0=Select, 1=Update, 2=Delete
     std::uniform_int_distribution<int> user_dist(0, max_users - 1);
@@ -68,6 +72,7 @@ void StressWorker(int id, int num_ops, int max_users) {
         }
         RunSQL(engine, sql);
     }
+    delete auth_manager;
 }
 
 void TestRealWorldTraffic() {
@@ -83,9 +88,11 @@ void TestRealWorldTraffic() {
     
     // 1. Setup Table
     {
-        ExecutionEngine setup_engine(g_bpm, g_catalog);
+        auto *auth_manager = new AuthManager(g_bpm, g_catalog);
+        ExecutionEngine setup_engine(g_bpm, g_catalog, auth_manager);
         RunSQL(setup_engine, "2E3MEL GADWAL users (id RAKAM, name GOMLA);");
         RunSQL(setup_engine, "2E3MEL FEHRIS idx_users 3ALA users (id);");
+        delete auth_manager;
     }
 
     // 2. PHASE 1: POPULATE (Single Threaded to ensure data exists)
@@ -112,7 +119,3 @@ void TestRealWorldTraffic() {
     delete g_disk_manager;
 }
 
-int main() {
-    TestRealWorldTraffic();
-    return 0;
-}

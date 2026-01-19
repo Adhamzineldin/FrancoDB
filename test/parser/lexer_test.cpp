@@ -56,7 +56,3 @@ void TestLexer() {
     std::cout << "[SUCCESS] Lexer speaks Franco fluently!" << std::endl;
 }
 
-int main() {
-    TestLexer();
-    return 0;
-}

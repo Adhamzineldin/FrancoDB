@@ -5,7 +5,7 @@ services:
     # Build from project root with Dockerfile in installers/docker
     build:
       context: ../..
-      dockerfile: installers/docker/Dockerfile
+      dockerfile: Dockerfile
     
     # Container name for easy reference
     container_name: francodb-server

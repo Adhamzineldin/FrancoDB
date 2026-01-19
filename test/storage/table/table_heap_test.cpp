@@ -13,16 +13,23 @@
 using namespace francodb;
 
 // Helper to create a tuple from a string
-Tuple CreateTuple(const std::string &val) {
-    std::vector<char> data(val.begin(), val.end());
-    return Tuple(data);
+Tuple CreateTuple(const std::string &val, Schema &out_schema) {
+    // Create a simple schema with one VARCHAR column
+    std::vector<Column> cols = {Column("data", TypeId::VARCHAR, (uint32_t)val.length())};
+    out_schema = Schema(cols);
+    
+    // Create a Value and wrap in vector
+    std::vector<Value> values = {Value(TypeId::VARCHAR, val)};
+    
+    return Tuple(values, out_schema);
 }
 
 // Helper to assert tuple content
-void CheckTuple(Tuple &tuple, const std::string &expected_val) {
-    std::string content(tuple.GetData(), tuple.GetLength());
-    if (content != expected_val) {
-        std::cout << "[FAIL] Expected '" << expected_val << "' but got '" << content << "'" << std::endl;
+void CheckTuple(Tuple &tuple, const Schema &schema, const std::string &expected_val) {
+    Value v = tuple.GetValue(schema, 0); // Get first column value
+    std::string actual = v.GetAsString();
+    if (actual != expected_val) {
+        std::cout << "[FAIL] Expected '" << expected_val << "' but got '" << actual << "'" << std::endl;
         assert(false);
     }
 }
@@ -47,6 +54,7 @@ void TestTableHeap() {
     // If each tuple is ~100 bytes, we fit ~40 tuples per page.
     // Let's insert 100 tuples to force 2-3 pages.
     std::vector<RID> rids;
+    std::vector<Schema> schemas; // Store schemas for each tuple
     int count = 100;
     
     for (int i = 0; i < count; i++) {
@@ -54,7 +62,11 @@ void TestTableHeap() {
         // Make it slightly variable length
         if (i % 2 == 0) val += "_EXTRA_LONG_STRING_FOR_PADDING";
         
-        Tuple tuple = CreateTuple(val);
+        std::vector<Column> temp_cols = {Column("data", TypeId::VARCHAR, (uint32_t)val.length())};
+        Schema schema(temp_cols);
+        std::vector<Value> temp_vals = {Value(TypeId::VARCHAR, val)};
+        Tuple tuple(temp_vals, schema);
+        schemas.push_back(schema);
         RID rid;
         bool res = table->InsertTuple(tuple, &rid, nullptr);
         
@@ -73,7 +85,7 @@ void TestTableHeap() {
         std::string expected = "Tuple_Data_" + std::to_string(i);
         if (i % 2 == 0) expected += "_EXTRA_LONG_STRING_FOR_PADDING";
         
-        CheckTuple(t, expected);
+        CheckTuple(t, schemas[i], expected);
     }
     std::cout << "[STEP 3] Verified all tuples read back correctly." << std::endl;
 
@@ -92,7 +104,10 @@ void TestTableHeap() {
     // 5. Update Logic (Delete Old + Insert New)
     std::cout << "[STEP 5] Testing Update..." << std::endl;
     std::string new_val = "UPDATED_TUPLE_VALUE_999";
-    Tuple new_tuple = CreateTuple(new_val);
+    std::vector<Column> temp_cols = {Column("data", TypeId::VARCHAR, (uint32_t)new_val.length())};
+    Schema update_schema(temp_cols);
+    std::vector<Value> temp_vals = {Value(TypeId::VARCHAR, new_val)};
+    Tuple new_tuple(temp_vals, update_schema);
     
     // Update tuple 20
     bool update_res = table->UpdateTuple(new_tuple, rids[20], nullptr);
@@ -118,7 +133,3 @@ void TestTableHeap() {
     std::cout << "[SUCCESS] Table Heap Test Passed!" << std::endl;
 }
 
-int main() {
-    TestTableHeap();
-    return 0;
-}

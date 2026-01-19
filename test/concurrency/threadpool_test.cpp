@@ -75,13 +75,3 @@ void TestShutdown() {
     std::cout << "  -> SUCCESS: Pool destroyed without hanging." << std::endl;
 }
 
-int main() {
-    std::cout << "=== FRANCODB THREAD POOL DIAGNOSTIC ===" << std::endl;
-    
-    TestBasicExecution();
-    TestMassiveConcurrency();
-    TestShutdown();
-    
-    std::cout << "\nALL TESTS PASSED. SYSTEM IS STABLE." << std::endl;
-    return 0;
-}

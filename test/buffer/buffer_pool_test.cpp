@@ -1,3 +1,4 @@
+#include "../framework/test_runner.h"
 #include "buffer/buffer_pool_manager.h"
 #include <cstdio>
 #include <string>
@@ -102,12 +103,10 @@ void TestBufferPoolBinary() {
     std::cout << "[SUCCESS] All Buffer Pool tests passed!" << std::endl;
 }
 
-int main() {
-    try {
+namespace francodb_test {
+void RunBufferPoolTests(TestRunner& runner) {
+    runner.RunTest("Buffer", "Buffer Pool Binary Test", []() {
         TestBufferPoolBinary();
-    } catch (const std::exception &e) {
-        std::cerr << "[FAIL] Exception: " << e.what() << std::endl;
-        return 1;
-    }
-    return 0;
+    });
 }
+} // namespace francodb_test

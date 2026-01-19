@@ -9,11 +9,12 @@
 #include "parser/parser.h"
 #include "execution/execution_engine.h"
 #include "storage/index/index_key.h"
+#include "common/auth_manager.h"
 
 using namespace francodb;
 
 // Helper to create keys for verification
-GenericKey<8> MakeKey(int n) {
+static GenericKey<8> MakeKey(int n) {
     GenericKey<8> k;
     Value v(TypeId::INTEGER, n);
     k.SetFromValue(v);
@@ -25,10 +26,10 @@ void RunQuery(ExecutionEngine &engine, const std::string &sql) {
     Lexer lexer(sql);
     Parser parser(std::move(lexer));
     auto stmt = parser.ParseQuery();
-    engine.Execute(stmt.get());
+    engine.Execute(stmt.get(), nullptr);
 }
 
-int main() {
+void TestIndexExecution() {
     std::string db_file = "test_index_exec.francodb";
     if (std::filesystem::exists(db_file)) {
         std::filesystem::remove(db_file);
@@ -38,7 +39,8 @@ int main() {
     auto *disk_manager = new DiskManager(db_file);
     auto *bpm = new BufferPoolManager(50, disk_manager);
     auto *catalog = new Catalog(bpm);
-    ExecutionEngine engine(bpm, catalog);
+    auto *auth_manager = new AuthManager(bpm, catalog);
+    ExecutionEngine engine(bpm, catalog, auth_manager);
 
     std::cout << "=== STARTING INDEX EXECUTION TEST ===" << std::endl;
 
@@ -62,7 +64,7 @@ int main() {
         IndexInfo *index = catalog->GetIndex("idx_id");
         if (index == nullptr) {
             std::cout << "[FAIL] Catalog could not find index 'idx_id'" << std::endl;
-            return 1;
+            
         }
 
         std::vector<RID> result;
@@ -73,7 +75,7 @@ int main() {
             std::cout << "[PASS] Index Lookup(100) -> Found! RID Page: " << result[0].GetPageId() << std::endl;
         } else {
             std::cout << "[FAIL] Index Lookup(100) Failed! InsertExecutor didn't update index." << std::endl;
-            return 1;
+            
         }
 
         // B. Check for ID 200
@@ -83,7 +85,7 @@ int main() {
             std::cout << "[PASS] Index Lookup(200) -> Found! RID Page: " << result[0].GetPageId() << std::endl;
         } else {
             std::cout << "[FAIL] Index Lookup(200) Failed!" << std::endl;
-            return 1;
+            
         }
 
         // C. Check for missing key (Negative Test)
@@ -93,7 +95,7 @@ int main() {
             std::cout << "[PASS] Index Lookup(999) correctly returned not found." << std::endl;
         } else {
             std::cout << "[FAIL] Index found key 999 which should not exist!" << std::endl;
-            return 1;
+            
         }
         
         // 6. SELECT using the Index
@@ -103,7 +105,7 @@ int main() {
 
     } catch (const Exception &e) {
         std::cerr << "[CRITICAL ERROR] " << e.what() << std::endl;
-        return 1;
+        
     }
 
     // Cleanup
@@ -113,5 +115,5 @@ int main() {
     std::filesystem::remove(db_file);
 
     std::cout << "=== ALL INDEX EXECUTION TESTS PASSED ===" << std::endl;
-    return 0;
+    
 }

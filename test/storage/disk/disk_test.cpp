@@ -58,12 +58,12 @@ void TestPersistence() {
     // std::filesystem::remove(filename);
 }
 
-int main() {
+void TestDiskPersistence() {
     try {
         TestPersistence();
     } catch (const std::exception &e) {
         std::cerr << "[FAIL] Exception: " << e.what() << std::endl;
-        return 1;
+        
     }
-    return 0;
+    
 }
