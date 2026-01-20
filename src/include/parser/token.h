@@ -23,6 +23,13 @@ namespace francodb {
         STATUS,      // 7ALAH / STATUS
         DATABASES,   // DATABASES
         PASS,        // PASSWORD
+        DESCRIBE,    // WASF / DESCRIBE / DESC (when standalone)
+        ALTER,       // 3ADEL / ALTER (for ALTER TABLE)
+        ADD,         // ADAF / ADD
+        DROP,        // 2EMSA7 (when in context of ALTER)
+        MODIFY,      // 3ADEL (when modifying column)
+        RENAME,      // GHAYER_ESM / RENAME
+        COLUMN,      // 3AMOD / COLUMN
         INSERT,      // EMLA
         INTO,        // GOWA
         VALUES,      // ELKEYAM

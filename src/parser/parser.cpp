@@ -112,7 +112,7 @@ namespace francodb {
         else if (current_token_.type == TokenType::STATUS) {
             return ParseShowStatus();
         }
-        // 13. SHOW USERS / SHOW DATABASES
+        // 13. SHOW USERS / SHOW DATABASES / SHOW CREATE TABLE
         else if (current_token_.type == TokenType::SHOW) {
             Advance(); // Eat SHOW / WARENY
             if (current_token_.type == TokenType::USER) {
@@ -127,11 +127,42 @@ namespace francodb {
                 return std::make_unique<ShowDatabasesStatement>();
             } else if (current_token_.type == TokenType::TABLE) {
                 Advance(); // Eat TABLE / GADWAL
+                // Check if it's SHOW CREATE TABLE
+                if (current_token_.type == TokenType::CREATE) {
+                    Advance(); // Eat CREATE
+                    if (current_token_.type != TokenType::TABLE) {
+                        throw Exception(ExceptionType::PARSER, "Expected TABLE after SHOW CREATE");
+                    }
+                    Advance(); // Eat TABLE
+                    auto stmt = std::make_unique<ShowCreateTableStatement>();
+                    if (current_token_.type != TokenType::IDENTIFIER) {
+                        throw Exception(ExceptionType::PARSER, "Expected table name");
+                    }
+                    stmt->table_name_ = current_token_.text;
+                    Advance();
+                    if (!Match(TokenType::SEMICOLON))
+                        throw Exception(ExceptionType::PARSER, "Expected ; after SHOW CREATE TABLE");
+                    return stmt;
+                }
+                // Otherwise it's SHOW TABLES
                 if (!Match(TokenType::SEMICOLON))
                     throw Exception(ExceptionType::PARSER, "Expected ; after SHOW TABLES");
                 return std::make_unique<ShowTablesStatement>();
             }
             throw Exception(ExceptionType::PARSER, "Expected USER, DATABASES, or TABLES after SHOW");
+        }
+        // 14. DESCRIBE / DESC
+        else if (current_token_.type == TokenType::DESCRIBE) {
+            Advance(); // Eat DESCRIBE/WASF
+            auto stmt = std::make_unique<DescribeTableStatement>();
+            if (current_token_.type != TokenType::IDENTIFIER) {
+                throw Exception(ExceptionType::PARSER, "Expected table name after DESCRIBE");
+            }
+            stmt->table_name_ = current_token_.text;
+            Advance();
+            if (!Match(TokenType::SEMICOLON))
+                throw Exception(ExceptionType::PARSER, "Expected ; after DESCRIBE");
+            return stmt;
         }
 
         throw Exception(ExceptionType::PARSER, "Unknown command start: " + current_token_.text);

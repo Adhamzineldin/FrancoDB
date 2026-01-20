@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <sstream>
 #include <filesystem>
+#include <set>
 
 #include "common/auth_manager.h"
 #include "../include/network/session_context.h"
@@ -60,7 +61,12 @@ namespace francodb {
                     break;
                 case StatementType::CREATE: res = ExecuteCreate(dynamic_cast<CreateStatement *>(stmt));
                     break;
-                case StatementType::DROP: res = ExecuteDrop(dynamic_cast<DropStatement *>(stmt));
+                case StatementType::DROP:
+                    // Protect system database from table drops
+                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error("Cannot drop tables in system database");
+                    }
+                    res = ExecuteDrop(dynamic_cast<DropStatement *>(stmt));
                     break;
 
                 // --- USER MANAGEMENT ---
@@ -75,13 +81,28 @@ namespace francodb {
                     break;
 
                 // --- DML ---
-                case StatementType::INSERT: res = ExecuteInsert(dynamic_cast<InsertStatement *>(stmt));
+                case StatementType::INSERT:
+                    // Protect system database from modifications
+                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error("Cannot modify system database tables");
+                    }
+                    res = ExecuteInsert(dynamic_cast<InsertStatement *>(stmt));
                     break;
                 case StatementType::SELECT: res = ExecuteSelect(dynamic_cast<SelectStatement *>(stmt));
                     break;
-                case StatementType::DELETE_CMD: res = ExecuteDelete(dynamic_cast<DeleteStatement *>(stmt));
+                case StatementType::DELETE_CMD:
+                    // Protect system database from modifications
+                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error("Cannot modify system database tables");
+                    }
+                    res = ExecuteDelete(dynamic_cast<DeleteStatement *>(stmt));
                     break;
-                case StatementType::UPDATE_CMD: res = ExecuteUpdate(dynamic_cast<UpdateStatement *>(stmt));
+                case StatementType::UPDATE_CMD:
+                    // Protect system database from modifications
+                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error("Cannot modify system database tables");
+                    }
+                    res = ExecuteUpdate(dynamic_cast<UpdateStatement *>(stmt));
                     break;
 
                 // --- SYSTEM & METADATA ---
@@ -97,6 +118,15 @@ namespace francodb {
                 case StatementType::WHOAMI: res = ExecuteWhoAmI(dynamic_cast<WhoAmIStatement *>(stmt), session);
                     break;
                 case StatementType::SHOW_USERS: res = ExecuteShowUsers(dynamic_cast<ShowUsersStatement *>(stmt));
+                    break;
+                case StatementType::DESCRIBE_TABLE: 
+                    res = ExecuteDescribeTable(dynamic_cast<DescribeTableStatement *>(stmt));
+                    break;
+                case StatementType::SHOW_CREATE_TABLE:
+                    res = ExecuteShowCreateTable(dynamic_cast<ShowCreateTableStatement *>(stmt));
+                    break;
+                case StatementType::ALTER_TABLE:
+                    res = ExecuteAlterTable(dynamic_cast<AlterTableStatement *>(stmt));
                     break;
 
                 // --- TRANSACTIONS ---
@@ -127,6 +157,10 @@ namespace francodb {
                     // Check if database is selected
                     if (session->current_db.empty()) {
                         return ExecutionResult::Error("No database selected. Use 'USE DATABASE_NAME' first.");
+                    }
+                    // Prevent creating tables in reserved francodb/system unless superadmin
+                    if ((session->current_db == "francodb" || session->current_db == "system") && session->role != UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error("Cannot create tables in reserved database: " + session->current_db);
                     }
                     auto *create = dynamic_cast<CreateStatement *>(stmt);
                     return ExecuteCreate(create);
@@ -368,29 +402,46 @@ namespace francodb {
         auto rs = std::make_shared<ResultSet>();
         rs->column_names.push_back("Database");
 
-        // 1. Always show 'default' if access allowed
-        if (auth_manager_->HasDatabaseAccess(session->current_user, "default")) {
-            rs->AddRow({"default"});
+        // Use a set to avoid duplicates
+        std::set<std::string> db_names;
+
+        // Always show francodb if user has access
+        if (auth_manager_->HasDatabaseAccess(session->current_user, "francodb")) {
+            db_names.insert("francodb");
         }
 
-        // 2. Scan Directory
+        // Scan filesystem directory for persisted databases
         namespace fs = std::filesystem;
         auto &config = ConfigManager::GetInstance();
         std::string data_dir = config.GetDataDirectory();
 
         if (fs::exists(data_dir)) {
             for (const auto &entry: fs::directory_iterator(data_dir)) {
+                // Check for database directories
+                std::string db_name;
                 if (entry.is_directory()) {
-                    std::string db_name = entry.path().filename().string();
-                    if (db_name == "system" || db_name == "default") continue;
-
-                    // 3. Security Check
+                    db_name = entry.path().filename().string();
+                    
+                    // Verify it's a valid database directory (contains .francodb file)
+                    fs::path db_file = entry.path() / (db_name + ".francodb");
+                    if (!fs::exists(db_file)) {
+                        continue;  // Skip if no .francodb file inside
+                    }
+                }
+                
+                if (!db_name.empty() && db_name != "system") {
                     if (auth_manager_->HasDatabaseAccess(session->current_user, db_name)) {
-                        rs->AddRow({db_name});
+                        db_names.insert(db_name);
                     }
                 }
             }
         }
+
+        // Add all unique database names to result set
+        for (const auto &db_name : db_names) {
+            rs->AddRow({db_name});
+        }
+
         return ExecutionResult::Data(rs);
     }
 
@@ -476,54 +527,27 @@ namespace francodb {
         auto rs = std::make_shared<ResultSet>();
         rs->column_names = {"Tables_in_" + session->current_db};
 
-        // Strategy: We scan the physical directory of the CURRENT database.
-        // This is robust because it reflects the 'USE DB' command immediately.
-
-        auto &config = ConfigManager::GetInstance();
-        std::filesystem::path db_path = std::filesystem::path(config.GetDataDirectory()) / session->current_db;
-
-        if (!std::filesystem::exists(db_path)) {
-            // Fallback: If using default/system, check catalog memory
-            if (session->current_db == "default") {
-                std::vector<std::string> tables = catalog_->GetAllTableNames();
-                for (const auto &tbl: tables) rs->AddRow({tbl});
-                return ExecutionResult::Data(rs);
-            }
-            return ExecutionResult::Error("Database directory not found: " + session->current_db);
+        // Tables are stored inside the .francodb file and tracked by the catalog
+        // We should read from the current catalog instance
+        if (!catalog_) {
+            return ExecutionResult::Error("No catalog available");
         }
 
-        // Scan the folder for .table files (or however your DiskManager stores them)
-        // Assuming file structure: data/dbname/tablename.table
         try {
-            std::vector<std::string> table_names;
-            for (const auto &entry: std::filesystem::directory_iterator(db_path)) {
-                if (entry.is_regular_file()) {
-                    std::string fname = entry.path().filename().string();
-                    // Assuming tables are stored as "tablename.table" or just pages
-                    // If you store metadata separately, adjust this filter.
-                    // For now, we assume any file in the DB folder represents a table object
-                    // OR check against the catalog if catalog supports multi-db.
-
-                    // Simple filter: Ignore .log or .meta files
-                    if (fname.find(".log") == std::string::npos && fname.find(".meta") == std::string::npos) {
-                        // Strip extension if present
-                        size_t lastindex = fname.find_last_of(".");
-                        std::string raw_name = (lastindex == std::string::npos) ? fname : fname.substr(0, lastindex);
-                        table_names.push_back(raw_name);
-                    }
-                }
-            }
-
+            // Get all table names from the current catalog
+            std::vector<std::string> table_names = catalog_->GetAllTableNames();
+            
             // Sort for nice output
             std::sort(table_names.begin(), table_names.end());
-            for (const auto &name: table_names) {
+            
+            for (const auto &name : table_names) {
                 rs->AddRow({name});
             }
-        } catch (...) {
-            return ExecutionResult::Error("Failed to scan table directory.");
+            
+            return ExecutionResult::Data(rs);
+        } catch (const std::exception &e) {
+            return ExecutionResult::Error("Failed to retrieve tables: " + std::string(e.what()));
         }
-
-        return ExecutionResult::Data(rs);
     }
 
 
@@ -541,8 +565,8 @@ namespace francodb {
         else if (role_upper == "DENIED") r = UserRole::DENIED;
         else return ExecutionResult::Error("Invalid Role: " + stmt->role_);
 
-        // 2. Determine Target DB (Default to "default" if not specified)
-        std::string target_db = stmt->db_name_.empty() ? "default" : stmt->db_name_;
+        // 2. Determine Target DB (Default to "francodb" if not specified)
+        std::string target_db = stmt->db_name_.empty() ? "francodb" : stmt->db_name_;
 
         // 3. Call AuthManager
         if (auth_manager_->SetUserRole(stmt->username_, target_db, r)) {
@@ -571,12 +595,20 @@ namespace francodb {
         }
 
         try {
+            // Protect system/reserved database names
+            std::string db_lower = stmt->db_name_;
+            std::transform(db_lower.begin(), db_lower.end(), db_lower.begin(), ::tolower);
+            if (db_lower == "system" || db_lower == "francodb") {
+                return ExecutionResult::Error("Cannot create database with reserved name: " + stmt->db_name_);
+            }
+
             // Check if database already exists
             if (db_registry_->Get(stmt->db_name_) != nullptr) {
                 return ExecutionResult::Error("Database '" + stmt->db_name_ + "' already exists");
             }
 
             // Create the database (this initializes DiskManager, BufferPool, Catalog)
+            // Now creates a DIRECTORY structure: data/dbname/
             auto entry = db_registry_->GetOrCreate(stmt->db_name_);
 
             if (!entry) {
@@ -606,8 +638,19 @@ namespace francodb {
         }
 
         try {
-            // Get or load the database
+            // Try registry first
             auto entry = db_registry_->Get(stmt->db_name_);
+
+            // If not already loaded, try to load from disk (database directory exists)
+            if (!entry) {
+                namespace fs = std::filesystem;
+                auto &config = ConfigManager::GetInstance();
+                fs::path db_dir = fs::path(config.GetDataDirectory()) / stmt->db_name_;
+                fs::path db_file = db_dir / (stmt->db_name_ + ".francodb");
+                if (fs::exists(db_file)) {
+                    entry = db_registry_->GetOrCreate(stmt->db_name_);
+                }
+            }
 
             if (!entry) {
                 return ExecutionResult::Error("Database '" + stmt->db_name_ + "' does not exist");
@@ -654,6 +697,13 @@ namespace francodb {
         }
 
         try {
+            // Protect system/reserved databases
+            std::string db_lower = stmt->db_name_;
+            std::transform(db_lower.begin(), db_lower.end(), db_lower.begin(), ::tolower);
+            if (db_lower == "system" || db_lower == "francodb") {
+                return ExecutionResult::Error("Cannot drop system database: " + stmt->db_name_);
+            }
+
             auto entry = db_registry_->Get(stmt->db_name_);
 
             if (!entry) {
@@ -670,22 +720,147 @@ namespace francodb {
             if (entry->bpm) {
                 entry->bpm->FlushAllPages();
             }
-
-            // Remove from registry
-            auto &config = ConfigManager::GetInstance();
-            std::string data_dir = config.GetDataDirectory();
-            std::filesystem::path db_path = std::filesystem::path(data_dir) / stmt->db_name_;
-
-            // Delete the database file
-            if (std::filesystem::exists(db_path)) {
-                std::filesystem::remove(db_path);
+            if (entry->catalog) {
+                entry->catalog->SaveCatalog();
             }
 
-            // TODO: Remove from registry map (add Remove() method to DatabaseRegistry)
+            // Remove from registry first
+            bool removed = db_registry_->Remove(stmt->db_name_);
+
+            // Delete the entire database DIRECTORY
+            auto &config = ConfigManager::GetInstance();
+            std::string data_dir = config.GetDataDirectory();
+            std::filesystem::path db_dir = std::filesystem::path(data_dir) / stmt->db_name_;
+
+            if (std::filesystem::exists(db_dir) && std::filesystem::is_directory(db_dir)) {
+                std::filesystem::remove_all(db_dir);  // Recursively delete directory and contents
+            }
 
             return ExecutionResult::Message("Database '" + stmt->db_name_ + "' dropped successfully");
         } catch (const std::exception &e) {
             return ExecutionResult::Error("Failed to drop database: " + std::string(e.what()));
         }
+    }
+
+    // ====================================================================
+    // DESCRIBE TABLE / DESC
+    // ====================================================================
+    ExecutionResult ExecutionEngine::ExecuteDescribeTable(DescribeTableStatement *stmt) {
+        TableMetadata *table_info = catalog_->GetTable(stmt->table_name_);
+        if (!table_info) {
+            return ExecutionResult::Error("Table not found: " + stmt->table_name_);
+        }
+
+        auto rs = std::make_shared<ResultSet>();
+        rs->column_names = {"Field", "Type", "Null", "Key", "Default", "Extra"};
+
+        const Schema &schema = table_info->schema_;
+        for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
+            const Column &col = schema.GetColumn(i);
+            
+            // Field name
+            std::string field = col.GetName();
+            
+            // Type
+            std::string type;
+            switch (col.GetType()) {
+                case TypeId::INTEGER: type = "RAKAM"; break;
+                case TypeId::DECIMAL: type = "KASR"; break;
+                case TypeId::VARCHAR: type = "GOMLA(" + std::to_string(col.GetLength()) + ")"; break;
+                default: type = "UNKNOWN"; break;
+            }
+            
+            // Null
+            std::string null_str = col.IsNullable() ? "YES" : "NO";
+            
+            // Key
+            std::string key_str;
+            if (col.IsPrimaryKey()) key_str = "PRI";
+            else if (col.IsUnique()) key_str = "UNI";
+            else key_str = "";
+            
+            // Default
+            std::string default_str = col.HasDefaultValue() ? 
+                ValueToString(col.GetDefaultValue().value()) : "NULL";
+            
+            // Extra
+            std::string extra;
+            if (col.IsAutoIncrement()) extra = "AUTO_INCREMENT";
+            if (col.HasCheckConstraint()) {
+                if (!extra.empty()) extra += ", ";
+                extra += "CHECK(" + col.GetCheckConstraint() + ")";
+            }
+            
+            rs->AddRow({field, type, null_str, key_str, default_str, extra});
+        }
+
+        return ExecutionResult::Data(rs);
+    }
+
+    // ====================================================================
+    // SHOW CREATE TABLE
+    // ====================================================================
+    ExecutionResult ExecutionEngine::ExecuteShowCreateTable(ShowCreateTableStatement *stmt) {
+        TableMetadata *table_info = catalog_->GetTable(stmt->table_name_);
+        if (!table_info) {
+            return ExecutionResult::Error("Table not found: " + stmt->table_name_);
+        }
+
+        auto rs = std::make_shared<ResultSet>();
+        rs->column_names = {"Table", "Create Table"};
+
+        std::string create_sql = "2E3MEL GADWAL " + stmt->table_name_ + " (\n";
+        
+        const Schema &schema = table_info->schema_;
+        for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
+            const Column &col = schema.GetColumn(i);
+            
+            create_sql += "  " + col.GetName() + " ";
+            
+            // Type
+            switch (col.GetType()) {
+                case TypeId::INTEGER: create_sql += "RAKAM"; break;
+                case TypeId::DECIMAL: create_sql += "KASR"; break;
+                case TypeId::VARCHAR: create_sql += "GOMLA"; break;
+                default: create_sql += "UNKNOWN"; break;
+            }
+            
+            // Primary key
+            if (col.IsPrimaryKey()) create_sql += " ASASI";
+            
+            // Nullable
+            if (!col.IsNullable()) create_sql += " NOT NULL";
+            
+            // Unique
+            if (col.IsUnique()) create_sql += " UNIQUE";
+            
+            // Auto increment
+            if (col.IsAutoIncrement()) create_sql += " AUTO_INCREMENT";
+            
+            // Check constraint
+            if (col.HasCheckConstraint()) {
+                create_sql += " FA7S (" + col.GetCheckConstraint() + ")";
+            }
+            
+            // Default value
+            if (col.HasDefaultValue()) {
+                create_sql += " DEFAULT " + ValueToString(col.GetDefaultValue().value());
+            }
+            
+            if (i < schema.GetColumnCount() - 1) create_sql += ",";
+            create_sql += "\n";
+        }
+        
+        create_sql += ");";
+        
+        rs->AddRow({stmt->table_name_, create_sql});
+        return ExecutionResult::Data(rs);
+    }
+
+    // ====================================================================
+    // ALTER TABLE
+    // ====================================================================
+    ExecutionResult ExecutionEngine::ExecuteAlterTable(AlterTableStatement *stmt) {
+        return ExecutionResult::Error("ALTER TABLE is not fully implemented yet. Use DROP and CREATE to modify schema.");
     }
 } // namespace francodb

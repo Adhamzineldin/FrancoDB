@@ -245,7 +245,7 @@ namespace francodb {
             ss << "--- AVAILABLE DATABASES ---\n";
 
             // Always check if user can see 'default'
-            if (auth_manager_->HasDatabaseAccess(user, "default")) {
+            if (auth_manager_->HasDatabaseAccess(user, "francodb")) {
                 ss << "default\n";
             }
 

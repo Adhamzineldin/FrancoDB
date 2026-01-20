@@ -46,6 +46,11 @@
             ExecutionResult ExecuteDelete(DeleteStatement *stmt);
 
             ExecutionResult ExecuteUpdate(UpdateStatement *stmt);
+            
+            // --- SCHEMA INSPECTION ---
+            ExecutionResult ExecuteDescribeTable(DescribeTableStatement *stmt);
+            ExecutionResult ExecuteShowCreateTable(ShowCreateTableStatement *stmt);
+            ExecutionResult ExecuteAlterTable(AlterTableStatement *stmt);
 
             // --- TRANSACTION EXECUTORS ---
             ExecutionResult ExecuteBegin();

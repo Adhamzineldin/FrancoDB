@@ -369,11 +369,11 @@ namespace francodb {
     }
 
     bool AuthManager::SetUserRole(const std::string &username, UserRole new_role) {
-        return SetUserRole(username, "default", new_role);
+        return SetUserRole(username, "francodb", new_role);
     }
     
     UserRole AuthManager::GetUserRole(const std::string &username) {
-        return GetUserRole(username, "default");
+        return GetUserRole(username, "francodb");
     }
 
 }

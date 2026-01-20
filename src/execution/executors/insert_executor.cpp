@@ -24,7 +24,7 @@ void InsertExecutor::Init() {
             " but got " + std::to_string(plan_->values_.size()));
     }
     
-    // 3. SCHEMA VALIDATION: Check types and NULL values
+    // 3. SCHEMA VALIDATION: Check types, NULL values, and CHECK constraints
     for (uint32_t i = 0; i < plan_->values_.size(); i++) {
         const Column &col = table_info_->schema_.GetColumn(i);
         const Value &val = plan_->values_[i];
@@ -57,6 +57,77 @@ void InsertExecutor::Init() {
             } else {
                 throw Exception(ExceptionType::EXECUTION, 
                     "Type mismatch for column '" + col.GetName() + "'");
+            }
+        }
+        
+        // Validate CHECK constraints
+        if (col.HasCheckConstraint()) {
+            // Simple CHECK validation: parse "column_name > value" or "column_name >= value"
+            std::string check = col.GetCheckConstraint();
+            std::string col_name = col.GetName();
+            
+            // Find operator
+            size_t op_pos = std::string::npos;
+            std::string op;
+            if (check.find(">=") != std::string::npos) {
+                op_pos = check.find(">=");
+                op = ">=";
+            } else if (check.find("<=") != std::string::npos) {
+                op_pos = check.find("<=");
+                op = "<=";
+            } else if (check.find(">") != std::string::npos) {
+                op_pos = check.find(">");
+                op = ">";
+            } else if (check.find("<") != std::string::npos) {
+                op_pos = check.find("<");
+                op = "<";
+            } else if (check.find("!=") != std::string::npos) {
+                op_pos = check.find("!=");
+                op = "!=";
+            } else if (check.find("=") != std::string::npos) {
+                op_pos = check.find("=");
+                op = "=";
+            }
+            
+            if (op_pos != std::string::npos) {
+                std::string right_side = check.substr(op_pos + op.length());
+                // Trim whitespace
+                right_side.erase(0, right_side.find_first_not_of(" \t"));
+                right_side.erase(right_side.find_last_not_of(" \t") + 1);
+                
+                try {
+                    // Compare values based on type
+                    bool check_passed = false;
+                    if (col.GetType() == TypeId::INTEGER) {
+                        int actual = val.GetAsInteger();
+                        int expected = std::stoi(right_side);
+                        if (op == ">") check_passed = (actual > expected);
+                        else if (op == ">=") check_passed = (actual >= expected);
+                        else if (op == "<") check_passed = (actual < expected);
+                        else if (op == "<=") check_passed = (actual <= expected);
+                        else if (op == "=") check_passed = (actual == expected);
+                        else if (op == "!=") check_passed = (actual != expected);
+                    } else if (col.GetType() == TypeId::DECIMAL) {
+                        double actual = val.GetAsDouble();
+                        double expected = std::stod(right_side);
+                        if (op == ">") check_passed = (actual > expected);
+                        else if (op == ">=") check_passed = (actual >= expected);
+                        else if (op == "<") check_passed = (actual < expected);
+                        else if (op == "<=") check_passed = (actual <= expected);
+                        else if (op == "=") check_passed = (std::abs(actual - expected) < 0.0001);
+                        else if (op == "!=") check_passed = (std::abs(actual - expected) >= 0.0001);
+                    }
+                    
+                    if (!check_passed) {
+                        throw Exception(ExceptionType::EXECUTION, 
+                            "CHECK constraint violated for column '" + col.GetName() + 
+                            "': " + check);
+                    }
+                } catch (const Exception &e) {
+                    throw; // Re-throw our own exceptions
+                } catch (...) {
+                    // Ignore parse errors in check constraint
+                }
             }
         }
     }

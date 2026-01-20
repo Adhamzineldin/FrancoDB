@@ -9,7 +9,8 @@
 namespace francodb {
     enum class StatementType {
         CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, BEGIN, ROLLBACK, COMMIT, CREATE_DB, USE_DB,
-        LOGIN, CREATE_USER, ALTER_USER_ROLE, DELETE_USER, SHOW_USERS, SHOW_DATABASES, SHOW_TABLES, SHOW_STATUS, WHOAMI, DROP_DB, CREATE_TABLE
+        LOGIN, CREATE_USER, ALTER_USER_ROLE, DELETE_USER, SHOW_USERS, SHOW_DATABASES, SHOW_TABLES, SHOW_STATUS, WHOAMI, DROP_DB, CREATE_TABLE,
+        DESCRIBE_TABLE, ALTER_TABLE, SHOW_CREATE_TABLE
     };
 
     enum class LogicType { NONE, AND, OR };
@@ -235,6 +236,41 @@ namespace francodb {
     public:
         StatementType GetType() const override { return StatementType::DROP_DB; }
         std::string db_name_;
+    };
+    
+    // DESCRIBE TABLE / DESC
+    class DescribeTableStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::DESCRIBE_TABLE; }
+        std::string table_name_;
+    };
+    
+    // SHOW CREATE TABLE
+    class ShowCreateTableStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_CREATE_TABLE; }
+        std::string table_name_;
+    };
+    
+    // ALTER TABLE
+    class AlterTableStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::ALTER_TABLE; }
+        std::string table_name_;
+        
+        enum class AlterType {
+            ADD_COLUMN,
+            DROP_COLUMN,
+            MODIFY_COLUMN,
+            RENAME_COLUMN,
+            ADD_PRIMARY_KEY,
+            DROP_PRIMARY_KEY
+        };
+        
+        AlterType alter_type_;
+        std::string column_name_;
+        Column new_column_def_;  // For ADD_COLUMN or MODIFY_COLUMN
+        std::string new_column_name_;  // For RENAME_COLUMN
     };
     
 } // namespace francodb

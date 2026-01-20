@@ -481,7 +481,7 @@ void RunSetupWizard(const std::string& configPath) {
 int main(int argc, char* argv[]) {
     FrancoClient db_client;
     std::string username = net::DEFAULT_ADMIN_USERNAME;
-    std::string current_db = "default";
+    std::string current_db = "francodb";
     bool connected = false;
 
     if (argc > 1) {

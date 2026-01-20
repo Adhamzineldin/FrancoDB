@@ -32,6 +32,15 @@ namespace francodb {
         {"WHOAMI",  TokenType::WHOAMI},
         {"7ALAH",   TokenType::STATUS},
         {"STATUS",  TokenType::STATUS},
+        {"WASF",    TokenType::DESCRIBE},
+        {"DESCRIBE", TokenType::DESCRIBE},
+        {"ALTER",   TokenType::ALTER},
+        {"ADAF",    TokenType::ADD},
+        {"ADD",     TokenType::ADD},
+        {"GHAYER_ESM", TokenType::RENAME},
+        {"RENAME",  TokenType::RENAME},
+        {"3AMOD",   TokenType::COLUMN},
+        {"COLUMN",  TokenType::COLUMN},
 
         // --- DATA MODIFICATION ---
         {"2EMSA7",  TokenType::DELETE_CMD}, 
@@ -72,7 +81,7 @@ namespace francodb {
         // --- INDEX / PK ---
         {"FEHRIS", TokenType::INDEX},
         {"ASASI",  TokenType::PRIMARY_KEY},
-        {"MOFTA7", TokenType::PRIMARY_KEY},
+        {"MOFTA7", TokenType::KEY},
 
         // --- TRANSACTIONS ---
         {"2EBDA2", TokenType::BEGIN_TXN},

@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 #include <filesystem>
 
 #include "storage/disk/disk_manager.h"
@@ -40,18 +41,31 @@ public:
         return nullptr;
     }
 
+    // Get all registered database names (both external and owned)
+    std::vector<std::string> GetAllDatabaseNames() const {
+        std::vector<std::string> names;
+        for (const auto &[name, entry] : registry_) {
+            names.push_back(name);
+        }
+        return names;
+    }
+
         std::shared_ptr<DbEntry> GetOrCreate(const std::string &name, size_t pool_size = BUFFER_POOL_SIZE) {
         if (registry_.count(name)) return registry_[name];
 
         // Use configured data directory
         auto& config = ConfigManager::GetInstance();
         std::string data_dir = config.GetDataDirectory();
-        std::filesystem::create_directories(data_dir);
         
         auto entry = std::make_shared<DbEntry>();
-        // Use filesystem::path for cross-platform path handling (Windows uses \, Linux uses /)
-        std::filesystem::path db_path = std::filesystem::path(data_dir) / name;
-        entry->dm = std::make_unique<DiskManager>(db_path.string());
+        
+        // Create database DIRECTORY structure: data/dbname/
+        std::filesystem::path db_dir = std::filesystem::path(data_dir) / name;
+        std::filesystem::create_directories(db_dir);
+        
+        // Database file inside its directory: data/dbname/dbname.francodb
+        std::filesystem::path db_file = db_dir / (name + ".francodb");
+        entry->dm = std::make_unique<DiskManager>(db_file.string());
         
         // Apply encryption if enabled
         if (config.IsEncryptionEnabled() && !config.GetEncryptionKey().empty()) {
@@ -83,6 +97,13 @@ public:
         if (it->second->bpm) {
             it->second->bpm->FlushAllPages();
         }
+        if (it->second->catalog) {
+            it->second->catalog->SaveCatalog();
+        }
+        // Release file handles to allow directory deletion on Windows
+        it->second->catalog.reset();
+        it->second->bpm.reset();
+        it->second->dm.reset();
         
         registry_.erase(it);
         external_bpm_.erase(name);
