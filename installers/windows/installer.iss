@@ -106,8 +106,10 @@ var
   ServiceStartResult: Integer;
 
 // ==============================================================================
-// HELPER: PROCESS CHECKING (Crucial Fix)
+// 1. HELPER FUNCTIONS
 // ==============================================================================
+
+// Checks if a specific process name is currently running using WMI
 function IsProcessRunning(const FileName: String): Boolean;
 var
   FSWbemLocator: Variant;
@@ -122,7 +124,7 @@ begin
     FWbemObjectSet := FWbemObjectSet.ExecQuery(Query);
     Result := (FWbemObjectSet.Count > 0);
   except
-    Result := False; // Fallback if WMI fails
+    Result := False;
   end;
 end;
 
@@ -180,6 +182,10 @@ begin
   Result := ServiceRebootRequired;
 end;
 
+// ==============================================================================
+// 2. WIZARD PAGES
+// ==============================================================================
+
 procedure InitializeWizard;
 begin
   PortPage := CreateInputQueryPage(wpWelcome, 'Server Config', 'Port Settings', 'Enter server port (Default: 2501)');
@@ -228,7 +234,7 @@ begin
 end;
 
 // ============================================================================== 
-// IMPROVED SERVICE STATE CHECKING
+// 3. ROBUST SERVICE STOPPING
 // ==============================================================================
 
 function GetServiceState(const ServiceName: String): Integer;
@@ -238,7 +244,7 @@ var
   Lines: TArrayOfString;
   I: Integer;
 begin
-  Result := -1; // -1 = Unknown/Not Found
+  Result := -1; 
   TempFile := ExpandConstant('{tmp}\service_state.txt');
   
   if Exec('cmd.exe', '/C sc query "' + ServiceName + '" > "' + TempFile + '" 2>&1', 
@@ -273,11 +279,10 @@ begin
   begin
     State := GetServiceState(ServiceName);
     
-    // Check 1: Is the Service Manager saying it's stopped?
+    // If Service Manager says it's stopped (1) or gone (-1)
     if (State = 1) or (State = -1) then
     begin
-      // Check 2: Is the ACTUAL PROCESS still running? (The "Zombie" Check)
-      // We check for both service wrapper and the server itself
+      // DOUBLE CHECK: Is the actual .exe still in memory?
       ProcessRunning := IsProcessRunning('francodb_server.exe') or IsProcessRunning('francodb_service.exe');
       
       if not ProcessRunning then
@@ -301,7 +306,7 @@ begin
 end;
 
 // ==============================================================================
-// MAIN INSTALLATION LOGIC
+// 4. MAIN INSTALLATION LOGIC
 // ==============================================================================
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -313,19 +318,17 @@ var
   ServicePath, DataDir, LogDir: String;
   ServiceStopped: Boolean;
 begin
+  // --- STOPPING SERVICE ---
   if CurStep = ssInstall then
   begin
     WizardForm.StatusLabel.Caption := 'Stopping FrancoDB...';
-    
     Exec('sc.exe', 'stop FrancoDBService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     
-    // Wait up to 120 seconds for full shutdown
+    // Wait up to 120 seconds
     ServiceStopped := WaitForServiceStop('FrancoDBService', 120);
     
     if not ServiceStopped then
     begin
-       // If it fails to stop nicely, we force kill to prevent installer hanging
-       // But we warn the user first? No, if we are reinstalling, assume user wants it done.
        if MsgBox('The database service is stuck.' + #13#10 + 
                  'Force close it? (Unsaved data might be lost)', mbError, MB_YESNO) = IDYES then
        begin
@@ -345,14 +348,17 @@ begin
     DelTree(ExpandConstant('{app}\log'), True, True, True);
   end;
 
+  // --- CONFIGURING & STARTING ---
   if CurStep = ssPostInstall then
   begin
     DataDir := ExpandConstant('{app}\data');
     LogDir  := ExpandConstant('{app}\log');
 
+    // Permissions
     Exec('icacls', '"' + DataDir + '" /grant Users:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('icacls', '"' + LogDir + '" /grant Users:(OI)(CI)M /T /C /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
+    // Write Config
     if not IsUpgrade then
     begin
        Port := PortPage.Values[0];
@@ -369,6 +375,7 @@ begin
        SaveStringToFile(ExpandConstant('{app}\bin\francodb.conf'), ConfigContent, False);
     end;
 
+    // Install Service
     ServicePath := ExpandConstant('{app}\bin\francodb_service.exe');
     ServiceInstalled := False;
     ServiceRebootRequired := False;
@@ -408,30 +415,66 @@ begin
           ServiceStarted := False;
           ServiceStartResult := ResultCode; 
        end;
+    end
+    else
+    begin
+       ServiceInstalled := False;
+       ServiceStarted := False;
+       ServiceStartResult := -1; 
     end;
 
+    // --- DETAILED SUMMARY REPORT ---
     SummaryText := 'STATUS REPORT' + #13#10 + '------------------------------------------------------------' + #13#10;
     
+    // Service Status
     if ServiceRebootRequired then
-      SummaryText := SummaryText + '[WARN] Service : REBOOT REQUIRED (Code 1072)' + #13#10
+    begin
+      SummaryText := SummaryText + '[WARN] Service : REBOOT REQUIRED (Code 1072)' + #13#10;
+      SummaryText := SummaryText + '       The previous service is stuck. Restart Windows' + #13#10;
+      SummaryText := SummaryText + '       to finish the update.' + #13#10;
+    end
     else if ServiceStarted then
       SummaryText := SummaryText + '[ OK ] Service : FrancoDB is running' + #13#10
+    else if not ServiceInstalled then
+      SummaryText := SummaryText + '[FAIL] Service : Failed to create (Code ' + IntToStr(ServiceStartResult) + ')' + #13#10
+    else if ServiceStartResult = -1 then
+      SummaryText := SummaryText + '[FAIL] Service : Executable missing from {app}\bin' + #13#10
     else
-      SummaryText := SummaryText + '[FAIL] Service : Failed to start' + #13#10;
+      SummaryText := SummaryText + '[FAIL] Service : Failed to start (Code ' + IntToStr(ServiceStartResult) + ')' + #13#10;
 
+    // Environment Variables Status
+    if NeedsAddPath(ExpandConstant('{app}\bin')) then
+      SummaryText := SummaryText + '[INFO] Env Var : Updated (Restart Terminal)' + #13#10
+    else
+      SummaryText := SummaryText + '[ OK ] Env Var : Already configured' + #13#10;
+
+    // Configuration Status
+    if IsUpgrade then
+      SummaryText := SummaryText + '[INFO] Config  : Preserved previous settings' + #13#10
+    else
+      SummaryText := SummaryText + '[ OK ] Config  : Generated successfully' + #13#10;
+
+    SummaryText := SummaryText + #13#10;
+
+    // Security Alert
     if (not IsUpgrade) and (EncryptionPage.SelectedValueIndex = 1) then
     begin
-      SummaryText := SummaryText + #13#10 + 'SECURITY ALERT' + #13#10 + '------------------------------------------------------------' + #13#10;
-      SummaryText := SummaryText + 'MASTER KEY: ' + GeneratedEncryptionKey + #13#10;
+      SummaryText := SummaryText + 'SECURITY ALERT' + #13#10;
+      SummaryText := SummaryText + '------------------------------------------------------------' + #13#10;
+      SummaryText := SummaryText + 'Below is your Master Encryption Key. You MUST save this.' + #13#10;
+      SummaryText := SummaryText + 'If you lose this key, your database is gone forever.' + #13#10 + #13#10;
+      SummaryText := SummaryText + GeneratedEncryptionKey + #13#10;
+      SummaryText := SummaryText + '------------------------------------------------------------' + #13#10;
     end;
 
     SummaryPage.RichEditViewer.Lines.Text := SummaryText;
     SummaryPage.RichEditViewer.Font.Name := 'Consolas';
+    SummaryPage.RichEditViewer.Font.Size := 9;
   end;
 end;
 
 // ==============================================================================
-// UNINSTALLER LOGIC
+// 5. UNINSTALLER LOGIC
 // ==============================================================================
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
