@@ -72,7 +72,7 @@ maayn://maayn:root@localhost:2501/mydb
 
 ### Using in Your Code
 
-See [SDK_README.md](SDK_README.md) for client library usage.
+See [SDK_README.md](docs/documentation/SDK_README.md) for client library usage.
 
 **C++ Example:**
 ```cpp
@@ -135,8 +135,8 @@ See `docs/test_commands_comprehensive.txt` for more query examples.
 ## Documentation
 
 - [INSTALL.md](INSTALL.md) - Installation guide
-- [SDK_README.md](SDK_README.md) - Client SDK documentation
-- [README_DOCKER.md](README_DOCKER.md) - Docker deployment guide
+- [SDK_README.md](docs/documentation/SDK_README.md) - Client SDK documentation
+- [README_DOCKER.md](docs/documentation/README_DOCKER.md) - Docker deployment guide
 - [docs/](docs/) - Additional documentation
 
 ## Architecture
