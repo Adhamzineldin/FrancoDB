@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <string>
 
-using namespace francodb_test;
+namespace francodb_test {
 
 struct MockEmployee {
     std::string name;
@@ -103,3 +103,6 @@ void RunOrderByTests(TestRunner& runner) {
         ASSERT_TRUE(names[0][0] < 'a'); // Uppercase sorts before lowercase (ASCII)
     });
 }
+
+} // namespace francodb_test
+

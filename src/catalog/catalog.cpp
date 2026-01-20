@@ -153,17 +153,28 @@ void Catalog::LoadCatalog() {
             in >> name >> table >> col >> root_page;
 
             if (names_to_oid_.find(table) != names_to_oid_.end()) {
-                 TableMetadata *t = tables_[names_to_oid_[table]].get();
-                 int col_idx = t->schema_.GetColIdx(col);
-                 TypeId key_type = t->schema_.GetColumn(col_idx).GetType();
+                 try {
+                     TableMetadata *t = tables_[names_to_oid_[table]].get();
+                     if (t == nullptr) continue;  // Skip if table is null
+                     
+                     int col_idx = t->schema_.GetColIdx(col);
+                     if (col_idx == -1) continue;  // Skip if column doesn't exist
+                     
+                     TypeId key_type = t->schema_.GetColumn(col_idx).GetType();
 
-                 auto index_info = std::make_unique<IndexInfo>(name, table, col, key_type, bpm_);
-                 // CRITICAL: Restore the B+Tree Root
-                 index_info->b_plus_tree_->SetRootPageId(root_page);
-                 
-                 IndexInfo *ptr = index_info.get();
-                 indexes_[name] = std::move(index_info);
-                 index_names_[name] = ptr;
+                     auto index_info = std::make_unique<IndexInfo>(name, table, col, key_type, bpm_);
+                     // CRITICAL: Restore the B+Tree Root
+                     if (index_info && index_info->b_plus_tree_) {
+                         index_info->b_plus_tree_->SetRootPageId(root_page);
+                     }
+                     
+                     IndexInfo *ptr = index_info.get();
+                     indexes_[name] = std::move(index_info);
+                     index_names_[name] = ptr;
+                 } catch (const std::exception &e) {
+                     // Skip corrupted index entries
+                     std::cerr << "[WARNING] Failed to restore index " << name << ": " << e.what() << std::endl;
+                 }
             }
         }
     }

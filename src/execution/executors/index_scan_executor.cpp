@@ -27,26 +27,21 @@ void IndexScanExecutor::Init() {
     try {
         index_info_->b_plus_tree_->GetValue(key, &result_rids_, txn_);
     } catch (const std::exception &e) {
-        // If GetValue crashes, log and return empty result set
-        std::cerr << "[INDEX_SCAN] Exception during GetValue: " << e.what() << std::endl;
+        // If GetValue crashes, return empty result set
         result_rids_.clear();
     } catch (...) {
         // If GetValue crashes, return empty result set
-        std::cerr << "[INDEX_SCAN] Unknown exception during GetValue" << std::endl;
         result_rids_.clear();
     }
 
-    // Log the result for debugging
-    std::cerr << "[INDEX_SCAN] B+Tree lookup for index returned " << result_rids_.size() << " RID(s)" << std::endl;
 
     // 5. Validate all RIDs before storing them
     std::vector<RID> valid_rids;
     for (const auto &rid : result_rids_) {
         if (rid.GetPageId() != INVALID_PAGE_ID && rid.GetPageId() >= 0) {
             valid_rids.push_back(rid);
-        } else {
-            std::cerr << "[INDEX_SCAN] Skipping invalid RID: PageId=" << rid.GetPageId() << std::endl;
         }
+        // Skip invalid RIDs silently
     }
     result_rids_ = std::move(valid_rids);
 

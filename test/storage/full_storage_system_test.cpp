@@ -11,8 +11,12 @@ using namespace francodb;
 
 void TestFullSystem() {
     std::string db_name = "francodb_system.francodb";
+    // Clean up any previous test files
     if (std::filesystem::exists(db_name)) {
         std::filesystem::remove(db_name);
+    }
+    if (std::filesystem::exists(db_name + ".meta")) {
+        std::filesystem::remove(db_name + ".meta");
     }
 
     std::cout << "[TEST] Starting Full System Integration Test..." << std::endl;

@@ -1,6 +1,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <filesystem>
 
 #include "storage/disk/disk_manager.h"
 #include "buffer/buffer_pool_manager.h"
@@ -24,8 +25,19 @@ static void RunQuery(ExecutionEngine &engine, const std::string &sql) {
 }
 
 void TestExecutionEngine() {
+    std::string db_file = "francodb.francodb";
+    std::string meta_file = db_file + ".meta";
+    
+    // Remove any previous instance of the database files
+    if (std::filesystem::exists(db_file)) {
+        std::filesystem::remove(db_file);
+    }
+    if (std::filesystem::exists(meta_file)) {
+        std::filesystem::remove(meta_file);
+    }
+    
     // 1. Setup Storage Engine
-    auto *disk_manager = new DiskManager("francodb.francodb");
+    auto *disk_manager = new DiskManager(db_file);
     auto *bpm = new BufferPoolManager(50, disk_manager); // 50 pages memory
     auto *catalog = new Catalog(bpm);
     auto *auth_manager = new AuthManager(bpm, catalog);
@@ -36,9 +48,9 @@ void TestExecutionEngine() {
     try {
         std::cout << "--- STARTING FRANCO DB ENGINE ---" << std::endl;
 
-        // A. CREATE TABLE
-        // 2E3MEL GADWAL users (id RAKAM, name GOMLA, points KASR);
-        RunQuery(engine, "2E3MEL GADWAL users (id RAKAM, name GOMLA, points KASR);");
+        // A. CREATE TABLE with PRIMARY KEY
+        // 2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, points KASR);
+        RunQuery(engine, "2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, points KASR);");
 
         // B. INSERT DATA
         // EMLA GOWA users ELKEYAM (1, 'Ahmed', 95.5);
@@ -84,6 +96,17 @@ void TestExecutionEngine() {
 
     } catch (const Exception &e) {
         std::cerr << "CRITICAL ERROR: " << e.what() << std::endl;
+        // Cleanup on error
+        delete auth_manager;
+        delete catalog;
+        delete bpm;
+        delete disk_manager;
+        if (std::filesystem::exists(db_file)) {
+            std::filesystem::remove(db_file);
+        }
+        if (std::filesystem::exists(meta_file)) {
+            std::filesystem::remove(meta_file);
+        }
         throw;
     }
 
@@ -92,6 +115,14 @@ void TestExecutionEngine() {
     delete catalog;
     delete bpm;
     delete disk_manager;
+    
+    // Remove database files to avoid conflicts with other tests
+    if (std::filesystem::exists(db_file)) {
+        std::filesystem::remove(db_file);
+    }
+    if (std::filesystem::exists(meta_file)) {
+        std::filesystem::remove(meta_file);
+    }
 }
 
 

@@ -93,7 +93,7 @@ bool DeleteExecutor::Next(Tuple *tuple) {
         }
     }
 
-    std::cout << "[EXEC] Deleted " << count << " rows." << std::endl;
+    // Logging removed to avoid interleaved output during concurrent operations
     is_finished_ = true;
     return false;
 }

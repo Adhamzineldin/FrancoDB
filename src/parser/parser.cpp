@@ -456,6 +456,13 @@ std::unique_ptr<CreateStatement> Parser::ParseCreateTable() {
     auto stmt = std::make_unique<UpdateStatement>();
     // [FIX] Do NOT Advance() here. '3ADEL' was already consumed by ParseQuery dispatch.
 
+    // [PATCH] Tolerate accidental 'GOWA' after UPDATE (e.g., "3ADEL GOWA users ...")
+    // Some tests or inputs may include GOWA due to similarity with INSERT syntax.
+    if (current_token_.type == TokenType::INTO) {
+        // Skip optional INTO
+        Advance();
+    }
+
     if (current_token_.type != TokenType::IDENTIFIER) 
         throw Exception(ExceptionType::PARSER, "Expected Table Name after 3ADEL");
 

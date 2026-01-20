@@ -31,8 +31,12 @@ void RunQuery(ExecutionEngine &engine, const std::string &sql) {
 
 void TestIndexExecution() {
     std::string db_file = "test_index_exec.francodb";
+    // Clean up any previous test files
     if (std::filesystem::exists(db_file)) {
         std::filesystem::remove(db_file);
+    }
+    if (std::filesystem::exists(db_file + ".meta")) {
+        std::filesystem::remove(db_file + ".meta");
     }
 
     // 1. Setup Engine
@@ -64,7 +68,7 @@ void TestIndexExecution() {
         IndexInfo *index = catalog->GetIndex("idx_id");
         if (index == nullptr) {
             std::cout << "[FAIL] Catalog could not find index 'idx_id'" << std::endl;
-            
+            throw Exception(ExceptionType::EXECUTION, "Index not found");
         }
 
         std::vector<RID> result;
@@ -75,7 +79,7 @@ void TestIndexExecution() {
             std::cout << "[PASS] Index Lookup(100) -> Found! RID Page: " << result[0].GetPageId() << std::endl;
         } else {
             std::cout << "[FAIL] Index Lookup(100) Failed! InsertExecutor didn't update index." << std::endl;
-            
+            throw Exception(ExceptionType::EXECUTION, "Index lookup failed");
         }
 
         // B. Check for ID 200
@@ -85,7 +89,7 @@ void TestIndexExecution() {
             std::cout << "[PASS] Index Lookup(200) -> Found! RID Page: " << result[0].GetPageId() << std::endl;
         } else {
             std::cout << "[FAIL] Index Lookup(200) Failed!" << std::endl;
-            
+            throw Exception(ExceptionType::EXECUTION, "Index lookup failed for 200");
         }
 
         // C. Check for missing key (Negative Test)
@@ -95,7 +99,7 @@ void TestIndexExecution() {
             std::cout << "[PASS] Index Lookup(999) correctly returned not found." << std::endl;
         } else {
             std::cout << "[FAIL] Index found key 999 which should not exist!" << std::endl;
-            
+            throw Exception(ExceptionType::EXECUTION, "Index incorrectly found non-existent key");
         }
         
         // 6. SELECT using the Index
@@ -105,14 +109,19 @@ void TestIndexExecution() {
 
     } catch (const Exception &e) {
         std::cerr << "[CRITICAL ERROR] " << e.what() << std::endl;
-        
     }
 
     // Cleanup
+    delete auth_manager;
     delete catalog;
     delete bpm;
     delete disk_manager;
-    std::filesystem::remove(db_file);
+    if (std::filesystem::exists(db_file)) {
+        std::filesystem::remove(db_file);
+    }
+    if (std::filesystem::exists(db_file + ".meta")) {
+        std::filesystem::remove(db_file + ".meta");
+    }
 
     std::cout << "=== ALL INDEX EXECUTION TESTS PASSED ===" << std::endl;
     

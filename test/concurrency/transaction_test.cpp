@@ -64,7 +64,7 @@ void StressWorker(int id, int num_ops, int max_users) {
                 sql = "2E5TAR * MEN users LAMA id = " + std::to_string(target_id) + ";";
                 break;
             case 1: // UPDATE
-                sql = "3ADEL users 5ALY name = 'Updated' LAMA id = " + std::to_string(target_id) + ";";
+                sql = "3ADEL GOWA users 5ALY name = 'Updated' LAMA id = " + std::to_string(target_id) + ";";
                 break;
             case 2: // DELETE
                 sql = "2EMSA7 MEN users LAMA id = " + std::to_string(target_id) + ";";
@@ -77,6 +77,7 @@ void StressWorker(int id, int num_ops, int max_users) {
 
 void TestRealWorldTraffic() {
     std::string db_file = "test_traffic.francodb";
+    // Clean up any previous test files
     if (std::filesystem::exists(db_file)) std::filesystem::remove(db_file);
     if (std::filesystem::exists(db_file + ".meta")) std::filesystem::remove(db_file + ".meta");
 
@@ -117,5 +118,9 @@ void TestRealWorldTraffic() {
     delete g_catalog;
     delete g_bpm;
     delete g_disk_manager;
+    
+    // Clean up test files
+    if (std::filesystem::exists(db_file)) std::filesystem::remove(db_file);
+    if (std::filesystem::exists(db_file + ".meta")) std::filesystem::remove(db_file + ".meta");
 }
 

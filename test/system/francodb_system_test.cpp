@@ -23,7 +23,18 @@ void RunSQL(ExecutionEngine &engine, const std::string &sql, bool expect_error =
         Parser parser(std::move(lexer));
         auto stmt = parser.ParseQuery();
         if (stmt) {
-            engine.Execute(stmt.get(), nullptr);
+            auto result = engine.Execute(stmt.get(), nullptr);
+            // Check if execution returned an error
+            if (!result.success) {
+                if (expect_error) {
+                    std::cout << "  [PASS] Expected error caught: " << result.message << std::endl;
+                    tests_passed++;
+                } else {
+                    std::cout << "  [FAIL] Execution error: " << result.message << " for SQL: " << sql << std::endl;
+                    tests_failed++;
+                }
+                return;
+            }
         }
         if (expect_error) {
             std::cout << "  [FAIL] Expected error but operation succeeded: " << sql << std::endl;
@@ -54,9 +65,9 @@ void TestHeader(const std::string &test_name) {
 void TestTableCreation(ExecutionEngine &engine) {
     TestHeader("Table Creation");
     
-    // Create table with primary key
+    // Create table with primary key (use ASASI for PRIMARY KEY)
     std::cout << "[1.1] Creating table 'users' with PRIMARY KEY..." << std::endl;
-    RunSQL(engine, "2E3MEL GADWAL users (id RAKAM MOFTA7 ASASI, name GOMLA, email GOMLA);");
+    RunSQL(engine, "2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, email GOMLA);");
     
     // Create table without primary key
     std::cout << "[1.2] Creating table 'products' without PRIMARY KEY..." << std::endl;
@@ -154,7 +165,7 @@ void TestUpdateOperations(ExecutionEngine &engine) {
     
     // Update non-primary key column
     std::cout << "[5.1] Updating non-primary key column (name)..." << std::endl;
-    RunSQL(engine, "3ADEL users 5ALY name = 'Ahmed Updated' LAMA id = 1;");
+    RunSQL(engine, "3ADEL GOWA users 5ALY name = 'Ahmed Updated' LAMA id = 1;");
     
     // Verify update
     std::cout << "[5.2] Verifying update..." << std::endl;
@@ -162,7 +173,7 @@ void TestUpdateOperations(ExecutionEngine &engine) {
     
     // Update primary key to unique value (should succeed)
     std::cout << "[5.3] Updating primary key to unique value..." << std::endl;
-    RunSQL(engine, "3ADEL users 5ALY id = 10 LAMA id = 1;");
+    RunSQL(engine, "3ADEL GOWA users 5ALY id = 10 LAMA id = 1;");
     
     // Verify primary key update
     std::cout << "[5.4] Verifying primary key update..." << std::endl;
@@ -170,11 +181,11 @@ void TestUpdateOperations(ExecutionEngine &engine) {
     
     // Try to update primary key to duplicate value (should fail)
     std::cout << "[5.5] Attempting to update primary key to duplicate (should fail)..." << std::endl;
-    RunSQL(engine, "3ADEL users 5ALY id = 2 LAMA id = 10;", true);
+    RunSQL(engine, "3ADEL GOWA users 5ALY id = 2 LAMA id = 10;", true);
     
     // Update multiple rows
     std::cout << "[5.6] Updating multiple rows..." << std::endl;
-    RunSQL(engine, "3ADEL users 5ALY email = 'updated@example.com' LAMA id = 2;");
+    RunSQL(engine, "3ADEL GOWA users 5ALY email = 'updated@example.com' LAMA id = 2;");
 }
 
 // ============================================================================
@@ -225,7 +236,7 @@ void TestTransactions(ExecutionEngine &engine) {
     
     // Rollback transaction
     std::cout << "[7.4] Rolling back transaction..." << std::endl;
-    RunSQL(engine, "ERGA3;");
+    RunSQL(engine, "2ERGA3;");
     
     // Verify data was rolled back
     std::cout << "[7.5] Verifying data was rolled back..." << std::endl;
@@ -238,7 +249,7 @@ void TestTransactions(ExecutionEngine &engine) {
     // Insert and update within transaction
     std::cout << "[7.7] Inserting and updating within transaction..." << std::endl;
     RunSQL(engine, "EMLA GOWA users ELKEYAM (200, 'TxnUser3', 'txn3@example.com');");
-    RunSQL(engine, "3ADEL users 5ALY name = 'TxnUser3 Updated' LAMA id = 200;");
+    RunSQL(engine, "3ADEL GOWA users 5ALY name = 'TxnUser3 Updated' LAMA id = 200;");
     
     // Commit transaction
     std::cout << "[7.8] Committing transaction..." << std::endl;
@@ -251,15 +262,15 @@ void TestTransactions(ExecutionEngine &engine) {
     // Test rollback of update
     std::cout << "[7.10] Testing rollback of update..." << std::endl;
     RunSQL(engine, "2EBDA2;");
-    RunSQL(engine, "3ADEL users 5ALY name = 'Should Rollback' LAMA id = 200;");
-    RunSQL(engine, "ERGA3;");
+    RunSQL(engine, "3ADEL GOWA users 5ALY name = 'Should Rollback' LAMA id = 200;");
+    RunSQL(engine, "2ERGA3;");
     RunSQL(engine, "2E5TAR * MEN users LAMA id = 200;");
     
     // Test rollback of delete
     std::cout << "[7.11] Testing rollback of delete..." << std::endl;
     RunSQL(engine, "2EBDA2;");
     RunSQL(engine, "2EMSA7 MEN users LAMA id = 200;");
-    RunSQL(engine, "ERGA3;");
+    RunSQL(engine, "2ERGA3;");
     RunSQL(engine, "2E5TAR * MEN users LAMA id = 200;");
 }
 
@@ -306,7 +317,7 @@ void TestEdgeCases(ExecutionEngine &engine) {
     
     // Update non-existent row
     std::cout << "[9.3] Updating non-existent row..." << std::endl;
-    RunSQL(engine, "3ADEL empty_table 5ALY name = 'Test' LAMA id = 999;");
+    RunSQL(engine, "3ADEL GOWA empty_table 5ALY name = 'Test' LAMA id = 999;");
     
     // Delete from empty table
     std::cout << "[9.4] Deleting from empty table..." << std::endl;
@@ -337,6 +348,7 @@ void TestDataPersistence(const std::string &db_file) {
     std::cout << "[10.3] Verifying indexes persisted..." << std::endl;
     RunSQL(engine2, "2E5TAR * MEN users LAMA id = 200;"); // Should use index
     
+    delete auth_manager2;
     delete catalog2;
     delete bpm2;
     delete disk_manager2;
@@ -355,7 +367,7 @@ void TestPrimaryKeyUpdateScenarios(ExecutionEngine &engine) {
     
     // Update PK to new unique value
     std::cout << "[11.2] Updating primary key to new unique value..." << std::endl;
-    RunSQL(engine, "3ADEL users 5ALY id = 600 LAMA id = 500;");
+    RunSQL(engine, "3ADEL GOWA users 5ALY id = 600 LAMA id = 500;");
     
     // Verify update
     std::cout << "[11.3] Verifying primary key update..." << std::endl;
@@ -364,7 +376,7 @@ void TestPrimaryKeyUpdateScenarios(ExecutionEngine &engine) {
     
     // Try to update to existing PK (should fail)
     std::cout << "[11.4] Attempting to update PK to existing value (should fail)..." << std::endl;
-    RunSQL(engine, "3ADEL users 5ALY id = 501 LAMA id = 600;", true);
+    RunSQL(engine, "3ADEL GOWA users 5ALY id = 501 LAMA id = 600;", true);
 }
 
 // ============================================================================
@@ -373,9 +385,9 @@ void TestPrimaryKeyUpdateScenarios(ExecutionEngine &engine) {
 void TestMultipleTables(ExecutionEngine &engine) {
     TestHeader("Multiple Tables Operations");
     
-    // Create second table with primary key
+    // Create second table with primary key (use ASASI for PRIMARY KEY)
     std::cout << "[12.1] Creating second table with primary key..." << std::endl;
-    RunSQL(engine, "2E3MEL GADWAL orders (order_id RAKAM MOFTA7 ASASI, user_id RAKAM, total KASR);");
+    RunSQL(engine, "2E3MEL GADWAL orders (order_id RAKAM ASASI, user_id RAKAM, total KASR);");
     
     // Insert into multiple tables
     std::cout << "[12.2] Inserting into multiple tables..." << std::endl;
@@ -401,6 +413,10 @@ void TestMultipleTables(ExecutionEngine &engine) {
 // MAIN TEST RUNNER
 // ============================================================================
 void TestFrancoDBSystem() {
+    // Reset counters at start of test
+    tests_passed = 0;
+    tests_failed = 0;
+    
     std::string db_file = "francodb_system_test.francodb";
     
     // Clean up old test files
@@ -422,6 +438,24 @@ void TestFrancoDBSystem() {
     auto *auth_manager = new AuthManager(bpm, catalog);
     ExecutionEngine engine(bpm, catalog, auth_manager);
     
+    auto cleanup = [&]() {
+        if (auth_manager) delete auth_manager;
+        if (catalog) delete catalog;
+        if (bpm) delete bpm;
+        if (disk_manager) delete disk_manager;
+        auth_manager = nullptr;
+        catalog = nullptr;
+        bpm = nullptr;
+        disk_manager = nullptr;
+        // Clean up test database file
+        if (std::filesystem::exists(db_file)) {
+            std::filesystem::remove(db_file);
+        }
+        if (std::filesystem::exists(db_file + ".meta")) {
+            std::filesystem::remove(db_file + ".meta");
+        }
+    };
+    
     try {
         // Run all test suites
         TestTableCreation(engine);
@@ -436,6 +470,16 @@ void TestFrancoDBSystem() {
         TestPrimaryKeyUpdateScenarios(engine);
         TestMultipleTables(engine);
         
+        // Close the first database before testing persistence
+        delete auth_manager;
+        delete catalog;
+        delete bpm;
+        delete disk_manager;
+        auth_manager = nullptr;
+        catalog = nullptr;
+        bpm = nullptr;
+        disk_manager = nullptr;
+        
         // Test persistence (reopen database)
         TestDataPersistence(db_file);
         
@@ -447,26 +491,19 @@ void TestFrancoDBSystem() {
         std::cout << "Tests Failed: " << tests_failed << std::endl;
         std::cout << "Total Tests:  " << (tests_passed + tests_failed) << std::endl;
         
-        if (tests_failed == 0) {
-            std::cout << "\n[SUCCESS] All tests passed! FrancoDB is ready for transportation layer." << std::endl;
-            delete catalog;
-            delete bpm;
-            delete disk_manager;
-            
-        } else {
-            std::cout << "\n[FAILURE] Some tests failed. Please review the output above." << std::endl;
-            delete catalog;
-            delete bpm;
-            delete disk_manager;
-            
+        cleanup();
+        
+        // Throw exception if any tests failed so TestRunner can track it
+        if (tests_failed > 0) {
+            throw std::runtime_error("FrancoDB System Test: " + std::to_string(tests_failed) + " tests failed");
         }
+        
+        std::cout << "\n[SUCCESS] All FrancoDB system tests passed!" << std::endl;
         
     } catch (const std::exception &e) {
         std::cout << "\n[FATAL ERROR] Test suite crashed: " << e.what() << std::endl;
-        delete catalog;
-        delete bpm;
-        delete disk_manager;
-        
+        cleanup();
+        throw; // Re-throw so TestRunner can catch it
     }
 }
 

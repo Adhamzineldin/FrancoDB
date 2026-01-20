@@ -8,8 +8,12 @@ using namespace francodb;
 
 void TestDiskRecycling() {
     std::string db_name = "recycle_test.francodb";
-    if (std::filesystem::exists(db_name + ".francodb")) {
-        std::filesystem::remove(db_name + ".francodb");
+    // Clean up any previous test files
+    if (std::filesystem::exists(db_name)) {
+        std::filesystem::remove(db_name);
+    }
+    if (std::filesystem::exists(db_name + ".meta")) {
+        std::filesystem::remove(db_name + ".meta");
     }
 
     std::cout << "[TEST] Starting Disk Recycle Test..." << std::endl;
