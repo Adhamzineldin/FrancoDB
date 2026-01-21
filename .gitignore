@@ -32,6 +32,8 @@ Makefile
 *.exe
 *.out
 *.app
+*.deb
+*.md5
 
 # Specific executable names for FrancoDB
 francodb
