@@ -1,45 +1,5 @@
-const net = require('net');
-
 // ==========================================
-// 1. CUSTOM EXCEPTIONS
-// ==========================================
-class FrancoDBError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = 'FrancoDBError';
-    }
-}
-
-class OperationalError extends FrancoDBError {
-    constructor(message) {
-        super(message);
-        this.name = 'OperationalError';
-    }
-}
-
-class AuthError extends FrancoDBError {
-    constructor(message) {
-        super(message);
-        this.name = 'AuthError';
-    }
-}
-
-class QueryError extends FrancoDBError {
-    constructor(message) {
-        super(message);
-        this.name = 'QueryError';
-    }
-}
-
-// ==========================================
-// 2. PROTOCOL CONSTANTS
-// ==========================================
-const CMD_TEXT = Buffer.from('Q');
-const CMD_JSON = Buffer.from('J');
-const CMD_BINARY = Buffer.from('B');
-
-// ==========================================
-// 3. CURSOR CLASS
+// 3. CURSOR CLASS (FIXED)
 // ==========================================
 class Cursor {
     constructor(connection) {
@@ -53,271 +13,167 @@ class Cursor {
             throw new OperationalError("Database is not connected");
         }
 
-        // Clear previous capture
-        this.lastRawBytes = Buffer.alloc(0);
-
         // 1. Select Protocol
         let msgType = CMD_TEXT;
         if (mode === 'json') msgType = CMD_JSON;
         else if (mode === 'binary') msgType = CMD_BINARY;
 
-        // 2. Pack & Send
+        // 2. Pack & Send Request
         const payloadBytes = Buffer.from(fql, 'utf-8');
         const header = Buffer.alloc(5);
-        msgType.copy(header, 0);
-        header.writeUInt32BE(payloadBytes.length, 1);
+        msgType.copy(header, 0); // Byte 0: Type
+        header.writeUInt32BE(payloadBytes.length, 1); // Bytes 1-4: Length
 
         try {
             this._conn.socket.write(Buffer.concat([header, payloadBytes]));
 
-            // 3. Read Response based on Mode
+            // 3. Read Response Packet (Length + Body)
+            // We use a helper to handle the Length-Prefix framing
+            const packet = await this._readPacket();
+
+            // Store for debugging
+            this.lastRawBytes = packet;
+
+            // 4. Parse based on Mode
             if (mode === 'binary') {
-                return await this._readBinaryResponse();
+                return this._parseBinary(packet);
             } else {
-                return await this._readTextResponse();
+                return this._parseText(packet);
             }
         } catch (e) {
+            if (e instanceof FrancoDBError) throw e;
             throw new OperationalError(`Network error: ${e.message}`);
         }
     }
 
-    async _readTextResponse() {
+    // [FIX] Generic Packet Reader: Reads 4 bytes Length, then N bytes Body
+    async _readPacket() {
         return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new OperationalError("Query timed out"));
-            }, this._conn.timeout);
-
-            this._conn.socket.once('data', (data) => {
-                clearTimeout(timeout);
-                this.lastRawBytes = Buffer.concat([this.lastRawBytes, data]);
-
-                const response = data.toString('utf-8').trim();
-                if (response.includes("ERROR") && !response.startsWith("{")) {
-                    reject(new QueryError(response));
-                } else {
-                    resolve(response);
-                }
-            });
-        });
-    }
-
-    async _readBinaryResponse() {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new OperationalError("Query timed out"));
-            }, this._conn.timeout);
-
             let buffer = Buffer.alloc(0);
-            let offset = 0;
+            let needed = 4; // Start by needing 4 bytes for Length Header
+            let readingBody = false;
+
+            const timeout = setTimeout(() => {
+                cleanup();
+                reject(new OperationalError("Query timed out"));
+            }, this._conn.timeout);
 
             const onData = (chunk) => {
                 buffer = Buffer.concat([buffer, chunk]);
-                this.lastRawBytes = Buffer.concat([this.lastRawBytes, chunk]);
 
-                try {
-                    // 1. Read Response Type (1 Byte)
-                    if (buffer.length < 1) return;
-                    const respType = buffer.readUInt8(0);
-                    offset = 1;
+                // Phase 1: Read Header
+                if (!readingBody) {
+                    if (buffer.length >= 4) {
+                        // We have the length header!
+                        needed = buffer.readUInt32BE(0);
 
-                    // --- CASE: ERROR (0xFF) ---
-                    if (respType === 0xFF) {
-                        if (buffer.length < offset + 4) return;
-                        const msgLen = buffer.readUInt32BE(offset);
-                        offset += 4;
-
-                        if (buffer.length < offset + msgLen) return;
-                        const errorMsg = buffer.toString('utf-8', offset, offset + msgLen);
-
-                        clearTimeout(timeout);
-                        this._conn.socket.removeListener('data', onData);
-                        reject(new QueryError(`Server Error: ${errorMsg}`));
-                        return;
+                        // Consume header, keep remainder
+                        buffer = buffer.subarray(4);
+                        readingBody = true;
                     }
+                }
 
-                    // --- CASE: SIMPLE MESSAGE (0x01) ---
-                    if (respType === 0x01) {
-                        if (buffer.length < offset + 4) return;
-                        const msgLen = buffer.readUInt32BE(offset);
-                        offset += 4;
-
-                        if (buffer.length < offset + msgLen) return;
-                        const message = buffer.toString('utf-8', offset, offset + msgLen);
-
-                        clearTimeout(timeout);
-                        this._conn.socket.removeListener('data', onData);
-                        resolve(message);
-                        return;
-                    }
-
-                    // --- CASE: TABLE DATA (0x02) ---
-                    if (respType === 0x02) {
-                        // A. Read Metadata
-                        if (buffer.length < offset + 8) return;
-                        const numCols = buffer.readUInt32BE(offset);
-                        offset += 4;
-                        const numRows = buffer.readUInt32BE(offset);
-                        offset += 4;
-
-                        // B. Read Columns
-                        const columns = [];
-                        for (let i = 0; i < numCols; i++) {
-                            if (buffer.length < offset + 1) return;
-                            const colType = buffer.readUInt8(offset);
-                            offset += 1;
-
-                            if (buffer.length < offset + 4) return;
-                            const nameLen = buffer.readUInt32BE(offset);
-                            offset += 4;
-
-                            if (buffer.length < offset + nameLen) return;
-                            const colName = buffer.toString('utf-8', offset, offset + nameLen);
-                            offset += nameLen;
-                            columns.push(colName);
-                        }
-
-                        // C. Read Rows
-                        const resultRows = [];
-                        for (let i = 0; i < numRows; i++) {
-                            const rowData = [];
-                            for (let j = 0; j < numCols; j++) {
-                                if (buffer.length < offset + 4) return;
-                                const valLen = buffer.readUInt32BE(offset);
-                                offset += 4;
-
-                                if (buffer.length < offset + valLen) return;
-                                const valStr = buffer.toString('utf-8', offset, offset + valLen);
-                                offset += valLen;
-
-                                // Auto-convert numbers
-                                if (/^\d+$/.test(valStr)) {
-                                    rowData.push(parseInt(valStr, 10));
-                                } else {
-                                    rowData.push(valStr);
-                                }
-                            }
-                            resultRows.push(rowData);
-                        }
-
-                        clearTimeout(timeout);
-                        this._conn.socket.removeListener('data', onData);
-                        resolve(resultRows);
-                        return;
-                    }
-
-                    clearTimeout(timeout);
-                    this._conn.socket.removeListener('data', onData);
-                    reject(new OperationalError(`Unknown response type: 0x${respType.toString(16)}`));
-
-                } catch (e) {
-                    clearTimeout(timeout);
-                    this._conn.socket.removeListener('data', onData);
-                    if (e instanceof QueryError) {
-                        reject(e);
-                    } else {
-                        reject(new OperationalError(`Binary parse failed: ${e.message}`));
+                // Phase 2: Read Body (Check repeatedly in case chunk was large)
+                if (readingBody) {
+                    if (buffer.length >= needed) {
+                        // We have the full body!
+                        const payload = buffer.subarray(0, needed);
+                        cleanup();
+                        resolve(payload);
                     }
                 }
             };
 
+            const onError = (err) => {
+                cleanup();
+                reject(err);
+            };
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+                this._conn.socket.removeListener('data', onData);
+                this._conn.socket.removeListener('error', onError);
+            };
+
             this._conn.socket.on('data', onData);
+            this._conn.socket.on('error', onError);
         });
     }
 
-    close() {
-        // No-op for now
-    }
-}
-
-// ==========================================
-// 4. CONNECTION CLASS
-// ==========================================
-class FrancoDB {
-    constructor(host = 'localhost', port = 2501, timeout = 10000) {
-        this.host = host;
-        this.port = port;
-        this.timeout = timeout;
-        this.socket = null;
-        this._connected = false;
-    }
-
-    async connect(username = '', password = '', database = '') {
-        return new Promise((resolve, reject) => {
-            this.socket = net.createConnection({ host: this.host, port: this.port }, async () => {
-                this._connected = true;
-
-                try {
-                    const cur = this.cursor();
-
-                    if (username && password) {
-                        const res = await cur.execute(`LOGIN ${username} ${password};\n`);
-                        if (!res.includes("OK") && !res.includes("SUCCESS")) {
-                            throw new AuthError(`Login failed: ${res}`);
-                        }
-                    }
-
-                    if (database) {
-                        await cur.execute(`2ESTA5DEM ${database};\n`);
-                    }
-
-                    resolve();
-                } catch (e) {
-                    this._connected = false;
-                    reject(e);
-                }
-            });
-
-            this.socket.on('error', (err) => {
-                this._connected = false;
-                reject(new OperationalError(`Connection error: ${err.message}`));
-            });
-        });
-    }
-
-    cursor() {
-        return new Cursor(this);
-    }
-
-    isConnected() {
-        return this._connected && this.socket !== null;
-    }
-
-    close() {
-        if (this.socket) {
-            try {
-                this.socket.destroy();
-            } catch (e) {
-                // Ignore errors on close
-            }
+    _parseText(buffer) {
+        const response = buffer.toString('utf-8').trim();
+        if (response.includes("ERROR") && !response.startsWith("{")) {
+            throw new QueryError(response);
         }
-        this.socket = null;
-        this._connected = false;
+        return response;
+    }
+
+    _parseBinary(buffer) {
+        let offset = 0;
+
+        // 1. Read Response Type (1 Byte)
+        if (buffer.length < 1) throw new OperationalError("Empty binary response");
+        const respType = buffer.readUInt8(offset);
+        offset += 1;
+
+        // --- CASE: ERROR (0xFF) ---
+        if (respType === 0xFF) {
+            const msgLen = buffer.readUInt32BE(offset);
+            offset += 4;
+            const errorMsg = buffer.toString('utf-8', offset, offset + msgLen);
+            throw new QueryError(`Server Error: ${errorMsg}`);
+        }
+
+        // --- CASE: SIMPLE MESSAGE (0x01) ---
+        if (respType === 0x01) {
+            const msgLen = buffer.readUInt32BE(offset);
+            offset += 4;
+            return buffer.toString('utf-8', offset, offset + msgLen);
+        }
+
+        // --- CASE: TABLE DATA (0x02) ---
+        if (respType === 0x02) {
+            const numCols = buffer.readUInt32BE(offset); offset += 4;
+            const numRows = buffer.readUInt32BE(offset); offset += 4;
+
+            // B. Read Columns
+            const columns = [];
+            for (let i = 0; i < numCols; i++) {
+                // Skip Type (1 byte)
+                offset += 1;
+                const nameLen = buffer.readUInt32BE(offset); offset += 4;
+                const colName = buffer.toString('utf-8', offset, offset + nameLen);
+                offset += nameLen;
+                columns.push(colName);
+            }
+
+            // C. Read Rows
+            const resultRows = [];
+            for (let i = 0; i < numRows; i++) {
+                const rowData = [];
+                for (let j = 0; j < numCols; j++) {
+                    const valLen = buffer.readUInt32BE(offset); offset += 4;
+                    const valStr = buffer.toString('utf-8', offset, offset + valLen);
+                    offset += valLen;
+
+                    // Auto-convert numbers
+                    if (/^-?\d+$/.test(valStr)) {
+                        rowData.push(parseInt(valStr, 10));
+                    } else if (/^-?\d*\.\d+$/.test(valStr)) {
+                        rowData.push(parseFloat(valStr));
+                    } else {
+                        rowData.push(valStr);
+                    }
+                }
+                resultRows.push(rowData);
+            }
+            return resultRows;
+        }
+
+        throw new OperationalError(`Unknown response type: 0x${respType.toString(16)}`);
+    }
+
+    close() {
+        // No-op
     }
 }
-
-// ==========================================
-// 5. EXPORTS & CONVENIENCE FUNCTION
-// ==========================================
-async function connect(options = {}) {
-    const {
-        host = 'localhost',
-        port = 2501,
-        user = '',
-        password = '',
-        database = ''
-    } = options;
-
-    const conn = new FrancoDB(host, port);
-    await conn.connect(user, password, database);
-    return conn;
-}
-
-module.exports = {
-    FrancoDB,
-    Cursor,
-    connect,
-    FrancoDBError,
-    OperationalError,
-    AuthError,
-    QueryError
-};
