@@ -92,3 +92,25 @@ if(WIN32)
             COMMENT "Auto-copying MinGW Runtime DLLs..."
     )
 endif()
+
+
+
+# =========================================================
+# 7. INSTALLATION CONFIGURATION
+# =========================================================
+# This makes "cmake --install" actually work!
+
+# Install the Server
+if(TARGET francodb_server)
+    install(TARGETS francodb_server RUNTIME DESTINATION bin)
+endif()
+
+# Install the Shell (Client)
+if(TARGET francodb_shell)
+    install(TARGETS francodb_shell RUNTIME DESTINATION bin)
+endif()
+
+# Install Setup Tool (if it exists)
+if(TARGET francodb_setup)
+    install(TARGETS francodb_setup RUNTIME DESTINATION bin)
+endif()

@@ -5,6 +5,7 @@
 build/
 bin/
 lib/
+data/
 
 # CMake auto-generated files (if you accidentally build in the source root)
 CMakeCache.txt

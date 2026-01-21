@@ -1,3 +1,5 @@
+name: francodb
+
 services:
   francodb:
     # Build from project root with Dockerfile in installers/docker
@@ -16,8 +18,6 @@ services:
     volumes:
       # Data directory - persistent storage
       - francodb_data:/opt/francodb/data
-      # Configuration directory (optional - map from project root)
-      - ../../francodb.conf:/opt/francodb/etc/francodb.conf:ro
       # Logs directory
       - francodb_logs:/opt/francodb/log
     
