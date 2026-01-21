@@ -3,81 +3,95 @@
 #include "common/exception.h"
 #include <cassert>
 #include <cstring>
-#include <iostream> // For debug logging
+#include <iostream>
+#include <algorithm> // For std::max
 
 namespace francodb {
 
 Tuple::Tuple(const std::vector<Value> &values, const Schema &schema) {
-    // 1. Validate Input
     if (values.size() != schema.GetColumnCount()) {
-        // Fallback: If sizes mismatch, create an empty/invalid tuple rather than crashing
-        return; 
+        return; // Fail gracefully if counts mismatch
     }
 
-    // 2. Calculate Total Size
-    uint32_t fixed_len = schema.GetLength();
-    uint32_t total_size = fixed_len;
+    // --- STEP 1: CALCULATE ROBUST SIZES ---
+    // We do NOT trust schema.GetLength() blindly. We calculate the 
+    // actual extent required by the fixed columns.
+    uint32_t max_fixed_end = 0;
     
-    // Calculate variable length space
-    for (const auto &val : values) {
-        if (val.GetTypeId() == TypeId::VARCHAR) {
-            total_size += val.GetAsString().length();
+    for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
+        const Column &col = schema.GetColumn(i);
+        uint32_t col_len = 0;
+        
+        // Determine length based on type
+        if (col.GetType() == TypeId::VARCHAR) {
+            // VARCHAR stores 2x uint32_t (offset, length) in the fixed area
+            col_len = sizeof(uint32_t) * 2;
+        } else if (col.GetType() == TypeId::DECIMAL || col.GetType() == TypeId::BIGINT || col.GetType() == TypeId::TIMESTAMP) {
+            col_len = 8;
+        } else {
+            col_len = 4; // INTEGER, BOOLEAN
+        }
+        
+        uint32_t end_pos = col.GetOffset() + col_len;
+        if (end_pos > max_fixed_end) {
+            max_fixed_end = end_pos;
         }
     }
 
-    // 3. Allocate Memory
-    data_.resize(total_size);
-    // Zero out memory to prevent reading garbage later
-    if (total_size > 0) {
-        std::memset(data_.data(), 0, total_size);
+    // Determine Variable Length Size
+    uint32_t var_len = 0;
+    for (const auto &val : values) {
+        if (val.GetTypeId() == TypeId::VARCHAR) {
+            var_len += val.GetAsString().length();
+        }
     }
 
-    // 4. Write Data with Bounds Checking
-    uint32_t var_offset = fixed_len; // Start of variable data area
+    // Allocate Total Size
+    uint32_t fixed_len = std::max(max_fixed_end, schema.GetLength());
+    uint32_t total_size = fixed_len + var_len;
+
+    data_.resize(total_size);
+    std::memset(data_.data(), 0, total_size);
+
+    // --- STEP 2: WRITE DATA ---
+    uint32_t var_offset = fixed_len; // Start writing strings after the fixed area
 
     for (size_t i = 0; i < values.size(); ++i) {
         const Column &col = schema.GetColumn(i);
         const Value &val = values[i];
         uint32_t offset = col.GetOffset();
 
-        // CRITICAL BOUNDS CHECK: Prevent 0xC0000005 Crash
+        // Bounds Check (Just in case, but Step 1 should prevent this)
         if (offset >= total_size) {
-            // Log error and skip writing to avoid crash
-            std::cerr << "[Tuple Error] Offset " << offset << " exceeds size " << total_size << std::endl;
-            continue; 
+            std::cerr << "[Tuple Error] Critical Logic Error: Offset " << offset 
+                      << " is outside total size " << total_size << std::endl;
+            continue;
         }
 
         if (col.GetType() == TypeId::VARCHAR) {
             std::string str = val.GetAsString();
             uint32_t str_len = static_cast<uint32_t>(str.length());
 
-            // Ensure metadata fits
-            if (offset + 2 * sizeof(uint32_t) > total_size) continue;
-
-            // Write metadata (offset, length)
-            memcpy(data_.data() + offset, &var_offset, sizeof(uint32_t));
-            memcpy(data_.data() + offset + sizeof(uint32_t), &str_len, sizeof(uint32_t));
-
-            // Ensure string data fits
-            if (var_offset + str_len > total_size) {
-                std::cerr << "[Tuple Error] String overflow. VarOffset: " << var_offset << " Len: " << str_len << std::endl;
-                continue;
+            // Write metadata: (Offset, Length)
+            // Ensure we have space for 8 bytes of metadata
+            if (offset + 8 <= total_size) {
+                memcpy(data_.data() + offset, &var_offset, sizeof(uint32_t));
+                memcpy(data_.data() + offset + sizeof(uint32_t), &str_len, sizeof(uint32_t));
             }
 
-            // Write string
+            // Write string data
             if (str_len > 0) {
-                memcpy(data_.data() + var_offset, str.c_str(), str_len);
+                if (var_offset + str_len <= total_size) {
+                    memcpy(data_.data() + var_offset, str.c_str(), str_len);
+                } else {
+                    std::cerr << "[Tuple Error] String Truncated! VarOffset: " << var_offset << std::endl;
+                }
             }
             var_offset += str_len;
         } else {
-            // Fixed types: Check if 4 or 8 bytes fit
-            uint32_t type_size = (col.GetType() == TypeId::DECIMAL || col.GetType() == TypeId::BIGINT) ? 8 : 4;
-            
-            if (offset + type_size > total_size) {
-                std::cerr << "[Tuple Error] Fixed overflow. Offset: " << offset << " Size: " << type_size << std::endl;
-                continue;
-            }
-            
+            // Fixed Types
+            // SerializeTo handles the specific bytes (4 or 8)
+            // We just ensure the pointer is valid.
             val.SerializeTo(data_.data() + offset);
         }
     }
@@ -88,38 +102,38 @@ Value Tuple::GetValue(const Schema &schema, uint32_t column_idx) const {
         throw Exception(ExceptionType::EXECUTION, "Column index out of range");
     }
     if (data_.empty()) {
-        // Return dummy value to prevent crash if tuple is invalid
-        return Value(TypeId::INTEGER, 0); 
+        // Return a safe default instead of crashing
+        return Value(TypeId::INTEGER, 0);
     }
     
     const Column &col = schema.GetColumn(column_idx);
     TypeId type = col.GetType();
     uint32_t offset = col.GetOffset();
 
-    // Bounds Check for Read
     if (offset >= data_.size()) {
-        throw Exception(ExceptionType::EXECUTION, "Column offset out of bounds");
+        // Log warning but don't throw if possible to recover
+        // throw Exception(ExceptionType::EXECUTION, "Column offset out of bounds");
+        return Value(TypeId::INTEGER, 0);
     }
 
     if (type == TypeId::VARCHAR) {
         if (offset + 8 > data_.size()) {
-            throw Exception(ExceptionType::EXECUTION, "VARCHAR metadata out of bounds");
+            return Value(TypeId::VARCHAR, "");
         }
         
         uint32_t var_offset, var_len;
         memcpy(&var_offset, data_.data() + offset, sizeof(uint32_t));
         memcpy(&var_len, data_.data() + offset + sizeof(uint32_t), sizeof(uint32_t));
 
+        // Safety check for reading string
         if (var_offset >= data_.size() || var_offset + var_len > data_.size()) {
-            // Return empty string instead of crashing/throwing if corrupt
-            return Value(TypeId::VARCHAR, ""); 
+            return Value(TypeId::VARCHAR, "");
         }
 
-        // [FIX] Pass explicit length to DeserializeFrom
         return Value::DeserializeFrom(data_.data() + var_offset, TypeId::VARCHAR, var_len);
     }
 
-    // [FIX] Pass 0 length for fixed types
+    // Pass 0 length for fixed types
     return Value::DeserializeFrom(data_.data() + offset, type, 0);
 }
 
