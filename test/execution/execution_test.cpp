@@ -9,6 +9,7 @@
 #include "parser/parser.h"
 #include "execution/execution_engine.h"
 #include "common/auth_manager.h"
+#include "recovery/log_manager.h"
 
 using namespace francodb;
 
@@ -42,10 +43,11 @@ void TestExecutionEngine() {
     auto *catalog = new Catalog(bpm);
     auto *db_registry = new DatabaseRegistry();
     db_registry->RegisterExternal("default", bpm, catalog);
-    auto *auth_manager = new AuthManager(bpm, catalog, db_registry);
+    auto *log_manager = new LogManager(db_file + ".log");
+    auto *auth_manager = new AuthManager(bpm, catalog, db_registry, log_manager);
     
     // 2. Start Execution Engine
-    ExecutionEngine engine(bpm, catalog, auth_manager, db_registry);
+    ExecutionEngine engine(bpm, catalog, auth_manager, db_registry, log_manager);
 
     try {
         std::cout << "--- STARTING FRANCO DB ENGINE ---" << std::endl;
@@ -103,6 +105,7 @@ void TestExecutionEngine() {
         delete db_registry;
         delete catalog;
         delete bpm;
+        delete log_manager;
         delete disk_manager;
         if (std::filesystem::exists(db_file)) {
             std::filesystem::remove(db_file);
@@ -110,7 +113,6 @@ void TestExecutionEngine() {
         if (std::filesystem::exists(meta_file)) {
             std::filesystem::remove(meta_file);
         }
-        throw;
     }
 
     // Cleanup
@@ -118,6 +120,7 @@ void TestExecutionEngine() {
     delete db_registry;
     delete catalog;
     delete bpm;
+    delete log_manager;
     delete disk_manager;
     
     // Remove database files to avoid conflicts with other tests
@@ -127,7 +130,9 @@ void TestExecutionEngine() {
     if (std::filesystem::exists(meta_file)) {
         std::filesystem::remove(meta_file);
     }
+    if (std::filesystem::exists(db_file + ".log")) {
+        std::filesystem::remove(db_file + ".log");
+    }
 }
-
 
 

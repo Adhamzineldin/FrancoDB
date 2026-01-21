@@ -353,15 +353,17 @@ bool InsertExecutor::Next(Tuple *tuple) {
     if (txn_) {
         Tuple empty_tuple; 
         txn_->AddModifiedTuple(rid, empty_tuple, false, plan_->table_name_);
-        
-        // [ACID] WRITE-AHEAD LOGGING
-        // Log the first value as a placeholder or string representation
-        Value log_val;
-        if (!reordered_values.empty()) log_val = reordered_values[0];
-        
-        LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), LogRecordType::INSERT, plan_->table_name_, log_val);
-        LogRecord::lsn_t lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
-        txn_->SetPrevLSN(lsn);
+
+        if (exec_ctx_->GetLogManager()) { 
+            Value log_val;
+            if (!reordered_values.empty()) log_val = reordered_values[0];
+            
+            LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), 
+                              LogRecordType::INSERT, plan_->table_name_, log_val);
+            
+            auto lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
+            txn_->SetPrevLSN(lsn);
+        }
     }
 
     // --- STEP 6: UPDATE INDEXES ---

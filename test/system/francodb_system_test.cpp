@@ -13,6 +13,7 @@
 #include "execution/execution_engine.h"
 #include "common/auth_manager.h"
 #include "network/database_registry.h"
+#include "recovery/log_manager.h"
 
 using namespace francodb;
 
@@ -371,8 +372,9 @@ void TestDataPersistence(const std::string &db_file) {
     auto *catalog2 = new Catalog(bpm2);
     auto *db_registry2 = new DatabaseRegistry();
     db_registry2->RegisterExternal("default", bpm2, catalog2);
-    auto *auth_manager2 = new AuthManager(bpm2, catalog2, db_registry2);
-    ExecutionEngine engine2(bpm2, catalog2, auth_manager2, db_registry2);
+    auto *log_manager2 = new LogManager(db_file + ".log");
+    auto *auth_manager2 = new AuthManager(bpm2, catalog2, db_registry2, log_manager2);
+    ExecutionEngine engine2(bpm2, catalog2, auth_manager2, db_registry2, log_manager2);
     
     // Verify data persisted
     std::cout << "[10.2] Verifying data persisted after restart..." << std::endl;
@@ -387,6 +389,8 @@ void TestDataPersistence(const std::string &db_file) {
     delete db_registry2;
     delete catalog2;
     delete bpm2;
+    // Delete log_manager2 AFTER bpm and catalog
+    delete log_manager2;
     delete disk_manager2;
 }
 
@@ -498,26 +502,37 @@ void TestFrancoDBSystem() {
     auto *catalog = new Catalog(bpm);
     auto *db_registry = new DatabaseRegistry();
     db_registry->RegisterExternal("default", bpm, catalog);
-    auto *auth_manager = new AuthManager(bpm, catalog, db_registry);
-    ExecutionEngine engine(bpm, catalog, auth_manager, db_registry);
+    auto *log_manager = new LogManager(db_file + ".log");
+    auto *auth_manager = new AuthManager(bpm, catalog, db_registry, log_manager);
+    ExecutionEngine engine(bpm, catalog, auth_manager, db_registry, log_manager);
     
     auto cleanup = [&]() {
         if (auth_manager) delete auth_manager;
         if (db_registry) delete db_registry;
         if (catalog) delete catalog;
         if (bpm) delete bpm;
+        // Delete log_manager AFTER bpm and catalog to ensure no pending log writes
+        if (log_manager) delete log_manager;
         if (disk_manager) delete disk_manager;
         auth_manager = nullptr;
         db_registry = nullptr;
         catalog = nullptr;
         bpm = nullptr;
+        log_manager = nullptr;
         disk_manager = nullptr;
+        
+        // Give system time to close file handles
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
         // Clean up test database file
         if (std::filesystem::exists(db_file)) {
             std::filesystem::remove(db_file);
         }
         if (std::filesystem::exists(db_file + ".meta")) {
             std::filesystem::remove(db_file + ".meta");
+        }
+        if (std::filesystem::exists(db_file + ".log")) {
+            std::filesystem::remove(db_file + ".log");
         }
     };
     
@@ -540,12 +555,18 @@ void TestFrancoDBSystem() {
         delete db_registry;
         delete catalog;
         delete bpm;
+        // Delete log_manager AFTER bpm/catalog
+        delete log_manager;
         delete disk_manager;
         auth_manager = nullptr;
         db_registry = nullptr;
         catalog = nullptr;
         bpm = nullptr;
+        log_manager = nullptr;
         disk_manager = nullptr;
+        
+        // Give system time to close file handles
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         
         // Test persistence (reopen database)
         TestDataPersistence(db_file);

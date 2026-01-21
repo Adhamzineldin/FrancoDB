@@ -10,6 +10,7 @@
 #include "execution/execution_engine.h"
 #include "storage/index/index_key.h"
 #include "common/auth_manager.h"
+#include "recovery/log_manager.h"
 
 using namespace francodb;
 
@@ -45,8 +46,9 @@ void TestIndexExecution() {
     auto *catalog = new Catalog(bpm);
     auto *db_registry = new DatabaseRegistry();
     db_registry->RegisterExternal("default", bpm, catalog);
-    auto *auth_manager = new AuthManager(bpm, catalog, db_registry);
-    ExecutionEngine engine(bpm, catalog, auth_manager, db_registry);
+    auto *log_manager = new LogManager(db_file + ".log");
+    auto *auth_manager = new AuthManager(bpm, catalog, db_registry, log_manager);
+    ExecutionEngine engine(bpm, catalog, auth_manager, db_registry, log_manager);
 
     std::cout << "=== STARTING INDEX EXECUTION TEST ===" << std::endl;
 
@@ -118,12 +120,16 @@ void TestIndexExecution() {
     delete db_registry;
     delete catalog;
     delete bpm;
+    delete log_manager;
     delete disk_manager;
     if (std::filesystem::exists(db_file)) {
         std::filesystem::remove(db_file);
     }
     if (std::filesystem::exists(db_file + ".meta")) {
         std::filesystem::remove(db_file + ".meta");
+    }
+    if (std::filesystem::exists(db_file + ".log")) {
+        std::filesystem::remove(db_file + ".log");
     }
 
     std::cout << "=== ALL INDEX EXECUTION TESTS PASSED ===" << std::endl;

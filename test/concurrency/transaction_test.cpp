@@ -14,6 +14,7 @@
 #include "execution/execution_engine.h"
 #include "common/auth_manager.h"
 #include "network/database_registry.h"
+#include "recovery/log_manager.h"
 
 using namespace francodb;
 
@@ -22,6 +23,7 @@ DiskManager *g_disk_manager;
 BufferPoolManager *g_bpm;
 Catalog *g_catalog;
 DatabaseRegistry *g_db_registry;
+LogManager *g_log_manager;
 std::mutex g_log_mutex;
 
 // Helper to run SQL
@@ -38,8 +40,8 @@ void RunSQL(ExecutionEngine &engine, const std::string &sql) {
 
 // PHASE 1: POPULATE (Insert only)
 void PopulationWorker(int id, int count) {
-    auto *auth_manager = new AuthManager(g_bpm, g_catalog, g_db_registry);
-    ExecutionEngine engine(g_bpm, g_catalog, auth_manager, g_db_registry);
+    auto *auth_manager = new AuthManager(g_bpm, g_catalog, g_db_registry, g_log_manager);
+    ExecutionEngine engine(g_bpm, g_catalog, auth_manager, g_db_registry, g_log_manager);
     for (int i = 0; i < count; i++) {
         int user_id = (id * 1000) + i;
         std::string sql = "EMLA GOWA users ELKEYAM (" + std::to_string(user_id) + ", 'User" + std::to_string(user_id) + "');";
@@ -50,8 +52,8 @@ void PopulationWorker(int id, int count) {
 
 // PHASE 2: STRESS (Update/Delete/Select)
 void StressWorker(int id, int num_ops, int max_users) {
-    auto *auth_manager = new AuthManager(g_bpm, g_catalog, g_db_registry);
-    ExecutionEngine engine(g_bpm, g_catalog, auth_manager, g_db_registry);
+    auto *auth_manager = new AuthManager(g_bpm, g_catalog, g_db_registry, g_log_manager);
+    ExecutionEngine engine(g_bpm, g_catalog, auth_manager, g_db_registry, g_log_manager);
     std::mt19937 rng(id + 999);
     std::uniform_int_distribution<int> dist(0, 2); // 0=Select, 1=Update, 2=Delete
     std::uniform_int_distribution<int> user_dist(0, max_users - 1);
@@ -90,11 +92,12 @@ void TestRealWorldTraffic() {
     g_catalog = new Catalog(g_bpm);
     g_db_registry = new DatabaseRegistry();
     g_db_registry->RegisterExternal("default", g_bpm, g_catalog);
+    g_log_manager = new LogManager(db_file + ".log");
     
     // 1. Setup Table
     {
-        auto *auth_manager = new AuthManager(g_bpm, g_catalog, g_db_registry);
-        ExecutionEngine setup_engine(g_bpm, g_catalog, auth_manager, g_db_registry);
+        auto *auth_manager = new AuthManager(g_bpm, g_catalog, g_db_registry, g_log_manager);
+        ExecutionEngine setup_engine(g_bpm, g_catalog, auth_manager, g_db_registry, g_log_manager);
         RunSQL(setup_engine, "2E3MEL GADWAL users (id RAKAM, name GOMLA);");
         RunSQL(setup_engine, "2E3MEL FEHRIS idx_users 3ALA users (id);");
         delete auth_manager;
@@ -119,13 +122,23 @@ void TestRealWorldTraffic() {
 
     // std::cout << "[SUCCESS] Engine survived the Phased Traffic Test!" << std::endl;
 
+    // CRITICAL: Delete in reverse order of creation
+    // Catalog and BPM might still reference log manager
     delete g_catalog;
     delete g_bpm;
-    delete g_disk_manager;
     delete g_db_registry;
+    
+    // Delete log manager LAST after all other resources are freed
+    // This ensures no one is still trying to write logs
+    delete g_log_manager;
+    
+    delete g_disk_manager;
+    
+    // Give system time to fully close file handles before deleting files
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     // Clean up test files
     if (std::filesystem::exists(db_file)) std::filesystem::remove(db_file);
     if (std::filesystem::exists(db_file + ".meta")) std::filesystem::remove(db_file + ".meta");
+    if (std::filesystem::exists(db_file + ".log")) std::filesystem::remove(db_file + ".log");
 }
-

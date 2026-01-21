@@ -94,15 +94,17 @@ bool DeleteExecutor::Next(Tuple *tuple) {
         if (deleted && txn_) {
             txn_->AddModifiedTuple(rid, tuple, true, plan_->table_name_);
             
-            // [ACID] WRITE-AHEAD LOGGING
-            Value old_val; 
-            if (table_info_->schema_.GetColumnCount() > 0) {
-                old_val = tuple.GetValue(table_info_->schema_, 0); // Log first column
-            }
+            if (exec_ctx_->GetLogManager()) {
+                Value old_val; 
+                if (table_info_->schema_.GetColumnCount() > 0) {
+                    old_val = tuple.GetValue(table_info_->schema_, 0);
+                }
             
-            LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), LogRecordType::APPLY_DELETE, plan_->table_name_, old_val);
-            LogRecord::lsn_t lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
-            txn_->SetPrevLSN(lsn);
+                LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), 
+                                  LogRecordType::APPLY_DELETE, plan_->table_name_, old_val);
+                auto lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
+                txn_->SetPrevLSN(lsn);
+            }
         }
     }
 
