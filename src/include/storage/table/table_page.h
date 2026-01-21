@@ -56,19 +56,21 @@ namespace francodb {
         uint32_t GetTupleCount();
 
     private:
-        static constexpr size_t OFFSET_CHECKSUM   = 0; 
+        static constexpr size_t OFFSET_CHECKSUM   = 0;
         static constexpr size_t OFFSET_PREV_PAGE  = 4; // Was 0
         static constexpr size_t OFFSET_NEXT_PAGE  = 8; // Was 4
         static constexpr size_t OFFSET_FREE_SPACE = 12; // Was 8
         static constexpr size_t OFFSET_TUPLE_COUNT= 16; // Was 12
         static constexpr size_t SIZE_HEADER       = 20; // Was 16
 
-        // Slot structure (4 bytes offset, 4 bytes size)
-        struct Slot {
+        // Slot structure (4 bytes offset, 4 bytes size, 1 byte meta) = 9 bytes
+        // Use explicit packed alignment to avoid padding issues
+        struct __attribute__((packed)) Slot {
             uint32_t offset;
             uint32_t size;
             uint8_t meta;
         };
+        static_assert(sizeof(Slot) == 9, "Slot must be exactly 9 bytes");
 
         // Private Helpers
        

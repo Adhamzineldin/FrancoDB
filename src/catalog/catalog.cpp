@@ -93,9 +93,10 @@ IndexInfo *Catalog::CreateIndex(const std::string &index_name, const std::string
 }
 
 std::vector<IndexInfo*> Catalog::GetTableIndexes(const std::string &table_name) {
+     std::lock_guard<std::mutex> lock(latch_);
      std::vector<IndexInfo*> result;
      for (auto &pair : indexes_) {
-         if (pair.second->table_name_ == table_name) {
+         if (pair.second && pair.second->table_name_ == table_name) {
              result.push_back(pair.second.get());
          }
      }
@@ -108,6 +109,19 @@ bool Catalog::DropTable(const std::string &table_name) {
     uint32_t oid = names_to_oid_[table_name];
     names_to_oid_.erase(table_name);
     tables_.erase(oid);
+    
+    // Also drop all indexes for this table
+    std::vector<std::string> indexes_to_remove;
+    for (auto &pair : indexes_) {
+        if (pair.second && pair.second->table_name_ == table_name) {
+            indexes_to_remove.push_back(pair.first);
+        }
+    }
+    for (const auto &index_name : indexes_to_remove) {
+        indexes_.erase(index_name);
+        index_names_.erase(index_name);
+    }
+    
     return true;
 }
 

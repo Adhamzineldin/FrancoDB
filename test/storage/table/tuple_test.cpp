@@ -39,6 +39,7 @@ void TestTuplePacking() {
 
     // 5. Assertions
     assert(v1.GetAsInteger() == 42);
+    std::cout << v2.GetAsString() << std::endl;
     assert(v2.GetAsString() == "Franco_Database_Project_S_Grade");
     assert(v3.GetAsString() == "true");
 

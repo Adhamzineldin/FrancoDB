@@ -21,7 +21,13 @@ public:
     TypeId GetTypeId() const { return type_id_; }
     int32_t GetAsInteger() const { return integer_; }
     double GetAsDouble() const { return decimal_; }
-    std::string GetAsString() const { return string_val_; }
+    std::string GetAsString() const {
+        // Return human-readable for BOOLEAN
+        if (type_id_ == TypeId::BOOLEAN) {
+            return integer_ != 0 ? std::string("true") : std::string("false");
+        }
+        return string_val_;
+    }
     void SerializeTo(char *dest) const;
     static Value DeserializeFrom(const char *src, TypeId type);
     friend std::ostream &operator<<(std::ostream &os, const Value &val);

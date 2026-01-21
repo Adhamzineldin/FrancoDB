@@ -73,6 +73,7 @@ namespace francodb {
     public:
         StatementType GetType() const override { return StatementType::INSERT; }
         std::string table_name_;
+        std::vector<std::string> column_names_;
         std::vector<Value> values_;
     };
 

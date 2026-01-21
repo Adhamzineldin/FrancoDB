@@ -111,13 +111,13 @@ void TestRealWorldTraffic() {
     workers.clear();
 
     // 3. PHASE 2: CHAOS (8 Threads reading/writing same data)
-    std::cout << "[INFO] Phase 2: Launching Chaos (Updates/Deletes)..." << std::endl;
+    // std::cout << "[INFO] Phase 2: Launching Chaos (Updates/Deletes)..." << std::endl;
     for (int i = 0; i < 8; i++) {
         workers.emplace_back(std::thread(StressWorker, i, 500, 1000));
     }
     for (auto &t : workers) t.join();
 
-    std::cout << "[SUCCESS] Engine survived the Phased Traffic Test!" << std::endl;
+    // std::cout << "[SUCCESS] Engine survived the Phased Traffic Test!" << std::endl;
 
     delete g_catalog;
     delete g_bpm;

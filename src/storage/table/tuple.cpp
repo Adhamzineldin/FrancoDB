@@ -1,6 +1,8 @@
 #include "storage/table/tuple.h"
 #include "storage/table/schema.h"
+#include "common/exception.h"
 #include <cassert>
+#include <cstring>
 
 namespace francodb {
 
@@ -8,8 +10,7 @@ Tuple::Tuple(const std::vector<Value> &values, const Schema &schema) {
     assert(values.size() == schema.GetColumnCount());
 
     // 1. Calculate Total Size
-    // Fixed Size (calculated by Schema) + Size of all Variable Data
-    uint32_t tuple_size = schema.GetLength();
+    uint32_t tuple_size = schema.GetLength();  // Fixed part
     for (const auto &val : values) {
         if (val.GetTypeId() == TypeId::VARCHAR) {
             tuple_size += val.GetAsString().length();
@@ -21,54 +22,75 @@ Tuple::Tuple(const std::vector<Value> &values, const Schema &schema) {
     std::fill(data_.begin(), data_.end(), 0);
 
     // 3. Write Data
-    // 'var_offset' tracks where the next string goes (starting at end of fixed area)
-    uint32_t var_offset = schema.GetLength(); 
+    uint32_t var_offset = schema.GetLength();  // Start of variable data
 
     for (size_t i = 0; i < values.size(); ++i) {
-        const auto &col = schema.GetColumn(i);
-        const auto &val = values[i];
+        const Column &col = schema.GetColumn(i);
+        const Value &val = values[i];
+        uint32_t offset = col.GetOffset();
 
         if (col.GetType() == TypeId::VARCHAR) {
-            // VARIABLE LENGTH LOGIC:
-            // 1. Get string data
+            // VARCHAR: Write (offset, length) pair in fixed area
             std::string str = val.GetAsString();
-            uint32_t str_len = str.length();
+            uint32_t str_len = static_cast<uint32_t>(str.length());
 
-            // 2. Write (Offset, Length) pair in the Fixed Area
-            uint32_t offset_val = var_offset;
-            memcpy(data_.data() + col.GetOffset(), &offset_val, sizeof(uint32_t));
-            memcpy(data_.data() + col.GetOffset() + 4, &str_len, sizeof(uint32_t));
+            // Write offset and length
+            memcpy(data_.data() + offset, &var_offset, sizeof(uint32_t));
+            memcpy(data_.data() + offset + sizeof(uint32_t), &str_len, sizeof(uint32_t));
 
-            // 3. Write actual string in the Variable Area
-            memcpy(data_.data() + var_offset, str.c_str(), str_len);
-
-            // 4. Update Heap Pointer
+            // Write actual string data
+            if (str_len > 0) {
+                memcpy(data_.data() + var_offset, str.c_str(), str_len);
+            }
             var_offset += str_len;
-
         } else {
-            // FIXED LENGTH LOGIC:
-            // Just write directly to the offset
-            val.SerializeTo(data_.data() + col.GetOffset());
+            // Fixed-size types: write directly
+            val.SerializeTo(data_.data() + offset);
         }
     }
 }
 
 Value Tuple::GetValue(const Schema &schema, uint32_t column_idx) const {
+    if (column_idx >= schema.GetColumnCount()) {
+        throw Exception(ExceptionType::EXECUTION, "Column index out of range");
+    }
+    if (data_.empty()) {
+        throw Exception(ExceptionType::EXECUTION, "Tuple data is empty");
+    }
+    
     const Column &col = schema.GetColumn(column_idx);
     TypeId type = col.GetType();
     uint32_t offset = col.GetOffset();
 
-    if (type == TypeId::VARCHAR) {
-        // Read (Offset, Length) from Fixed Area
-        uint32_t var_offset = *reinterpret_cast<const uint32_t *>(data_.data() + offset);
-        uint32_t var_len = *reinterpret_cast<const uint32_t *>(data_.data() + offset + 4);
+    if (offset >= data_.size()) {
+        throw Exception(ExceptionType::EXECUTION, 
+            "Column offset " + std::to_string(offset) + 
+            " >= data size " + std::to_string(data_.size()));
+    }
 
-        // Read string from Variable Area
+    if (type == TypeId::VARCHAR) {
+        // Read (offset, length) from fixed area
+        if (offset + 8 > data_.size()) {
+            throw Exception(ExceptionType::EXECUTION, "VARCHAR metadata out of range");
+        }
+        
+        uint32_t var_offset, var_len;
+        memcpy(&var_offset, data_.data() + offset, sizeof(uint32_t));
+        memcpy(&var_len, data_.data() + offset + sizeof(uint32_t), sizeof(uint32_t));
+
+        // Validate
+        if (var_offset >= data_.size() || var_offset + var_len > data_.size()) {
+            throw Exception(ExceptionType::EXECUTION, 
+                "VARCHAR data out of range: offset=" + std::to_string(var_offset) +
+                " len=" + std::to_string(var_len) + 
+                " data_size=" + std::to_string(data_.size()));
+        }
+
         std::string val_str(data_.data() + var_offset, var_len);
         return Value(TypeId::VARCHAR, val_str);
-    } 
-    
-    // Fixed Type
+    }
+
+    // Fixed types
     return Value::DeserializeFrom(data_.data() + offset, type);
 }
 

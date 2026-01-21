@@ -46,6 +46,7 @@ namespace francodb {
         void SetAutoIncrement(bool auto_inc) { is_auto_increment_ = auto_inc; }
         void SetCheckConstraint(const std::string& check) { check_constraint_ = check; }
         
+        
         std::string ToString() const;
         
         // Constraint validation following Single Responsibility Principle

@@ -4,6 +4,7 @@
 #include "storage/table/table_page.h"
 #include "storage/table/tuple.h"
 #include "concurrency/transaction.h"
+#include "common/exception.h" 
 
 namespace francodb {
 
@@ -35,6 +36,32 @@ namespace francodb {
 
         // Get the ID of the first page (useful for scanning)
         page_id_t GetFirstPageId() const;
+        
+        
+        
+        
+        class Iterator {
+        public:
+            Iterator(BufferPoolManager *bpm, page_id_t page_id, uint32_t slot_id, 
+                     Transaction *txn, bool is_end = false);
+            
+            Tuple operator*();
+            Iterator& operator++();
+            bool operator!=(const Iterator &other) const;
+            RID GetRID() const { return RID(current_page_id_, current_slot_); }
+
+        private:
+            void AdvanceToNextValidTuple();
+            
+            BufferPoolManager *bpm_;
+            page_id_t current_page_id_;
+            uint32_t current_slot_;
+            Transaction *txn_;
+            bool is_end_;
+        };
+
+        Iterator Begin(Transaction *txn = nullptr);
+        Iterator End();
 
     private:
         BufferPoolManager *buffer_pool_manager_;

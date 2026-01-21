@@ -3,6 +3,8 @@
 #include <cassert>
 #include <filesystem>
 #include <stdexcept>
+#include <chrono>
+#include <thread>
 
 #include "storage/disk/disk_manager.h"
 #include "buffer/buffer_pool_manager.h"
@@ -86,6 +88,11 @@ void TestPrimaryKeyConstraints(ExecutionEngine &engine) {
     TestHeader("Primary Key Constraints");
     
     try {
+        // Clean up by dropping and recreating the table
+        std::cout << "[2.0] Dropping and recreating users table..." << std::endl;
+        RunSQL(engine, "2EMSA7 GADWAL users;"); // DROP TABLE users
+        RunSQL(engine, "2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, email GOMLA);"); // CREATE TABLE
+        
         // Insert valid data
         std::cout << "[2.1] Inserting valid data with unique primary key..." << std::endl;
         RunSQL(engine, "EMLA GOWA users ELKEYAM (1, 'Ahmed', 'ahmed@example.com');");
@@ -228,6 +235,11 @@ void TestTransactions(ExecutionEngine &engine) {
     TestHeader("Transaction Operations");
     
     try {
+        // Clean up by dropping and recreating the table
+        std::cout << "[7.0] Dropping and recreating users table..." << std::endl;
+        RunSQL(engine, "2EMSA7 GADWAL users;"); // DROP TABLE users
+        RunSQL(engine, "2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, email GOMLA);"); // CREATE TABLE
+        
         // Begin transaction
         std::cout << "[7.1] Beginning transaction..." << std::endl;
         RunSQL(engine, "2EBDA2;");
@@ -292,6 +304,11 @@ void TestComplexQueries(ExecutionEngine &engine) {
     TestHeader("Complex Queries");
     
     try {
+        // Clean up by dropping and recreating the table
+        std::cout << "[8.0] Dropping and recreating users table..." << std::endl;
+        RunSQL(engine, "2EMSA7 GADWAL users;"); // DROP TABLE users
+        RunSQL(engine, "2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, email GOMLA);"); // CREATE TABLE
+        
         // Insert more data for complex queries
         std::cout << "[8.1] Inserting data for complex queries..." << std::endl;
         RunSQL(engine, "EMLA GOWA users ELKEYAM (300, 'User300', 'user300@example.com');");
@@ -379,6 +396,11 @@ void TestDataPersistence(const std::string &db_file) {
 void TestPrimaryKeyUpdateScenarios(ExecutionEngine &engine) {
     TestHeader("Primary Key Update Scenarios");
     
+    // Clean up by dropping and recreating the table
+    std::cout << "[11.0] Dropping and recreating users table..." << std::endl;
+    RunSQL(engine, "2EMSA7 GADWAL users;"); // DROP TABLE users
+    RunSQL(engine, "2E3MEL GADWAL users (id RAKAM ASASI, name GOMLA, email GOMLA);"); // CREATE TABLE
+    
     // Insert test data
     std::cout << "[11.1] Inserting test data..." << std::endl;
     RunSQL(engine, "EMLA GOWA users ELKEYAM (500, 'PKTest1', 'pk1@example.com');");
@@ -435,15 +457,36 @@ void TestFrancoDBSystem() {
     tests_passed = 0;
     tests_failed = 0;
     
+    // Use a simpler filename - tests run from the build directory
     std::string db_file = "francodb_system_test.francodb";
     
-    // Clean up old test files
-    if (std::filesystem::exists(db_file)) {
-        std::filesystem::remove(db_file);
+    // Aggressively delete ALL variations of database files
+    // Use a wildcard approach by checking multiple patterns
+    std::vector<std::string> potential_files = {
+        db_file,
+        db_file + ".meta",
+        "francodb_system_test.francodb.francodb",
+        "francodb_system_test.francodb.francodb.meta",
+        "francodb_system_test.meta",
+        "francodb_system_test.idx",
+        "francodb_system_test.log"
+    };
+    
+    for (const auto& f : potential_files) {
+        try {
+            if (std::filesystem::exists(f)) {
+                if (std::filesystem::is_regular_file(f)) {
+                    std::filesystem::remove(f);
+                }
+            }
+        } catch (const std::exception& e) {
+            // Ignore errors but log them if needed
+            (void)e;
+        }
     }
-    if (std::filesystem::exists(db_file + ".meta")) {
-        std::filesystem::remove(db_file + ".meta");
-    }
+    
+    // Give filesystem time to catch up
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     std::cout << "\n" << std::string(60, '=') << std::endl;
     std::cout << "FRANCO DB COMPREHENSIVE SYSTEM TEST" << std::endl;

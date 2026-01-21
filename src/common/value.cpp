@@ -1,6 +1,7 @@
 #include "common/value.h"
 #include <cstring>
 #include <iostream>
+#include <cstdint>
 
 namespace francodb {
 
@@ -38,16 +39,32 @@ void Value::CopyFrom(const Value &other) {
 
 void Value::SerializeTo(char *dest) const {
     switch (type_id_) {
-        case TypeId::INTEGER:
-        case TypeId::BOOLEAN:
-        case TypeId::TIMESTAMP:
+        case TypeId::INTEGER: {
             std::memcpy(dest, &integer_, sizeof(int32_t));
             break;
-        case TypeId::DECIMAL:
+        }
+        case TypeId::BOOLEAN: {
+            uint8_t b = static_cast<uint8_t>(integer_ != 0);
+            std::memcpy(dest, &b, sizeof(uint8_t));
+            break;
+        }
+        case TypeId::BIGINT: {
+            int64_t val = static_cast<int64_t>(integer_);
+            std::memcpy(dest, &val, sizeof(int64_t));
+            break;
+        }
+        case TypeId::TIMESTAMP: {
+            int64_t val = static_cast<int64_t>(integer_);
+            std::memcpy(dest, &val, sizeof(int64_t));
+            break;
+        }
+        case TypeId::DECIMAL: {
             std::memcpy(dest, &decimal_, sizeof(double));
             break;
+        }
         case TypeId::VARCHAR: {
-            std::memcpy(dest, string_val_.c_str(), string_val_.length());
+            // VARCHAR handled by Tuple (offset/length + raw bytes). Avoid writing here.
+            // No-op for standalone Value serialization of VARCHAR.
             break;
         }
         default:
@@ -63,14 +80,20 @@ Value Value::DeserializeFrom(const char *src, TypeId type) {
             return Value(TypeId::INTEGER, val);
         }
         case TypeId::BOOLEAN: {
-            int32_t val;
-            std::memcpy(&val, src, sizeof(int32_t));
-            return Value(TypeId::BOOLEAN, val);
+            uint8_t b;
+            std::memcpy(&b, src, sizeof(uint8_t));
+            return Value(TypeId::BOOLEAN, static_cast<int32_t>(b));
+        }
+        case TypeId::BIGINT: {
+            int64_t val;
+            std::memcpy(&val, src, sizeof(int64_t));
+            // Store into integer_ for simplicity (may truncate if > int32 range)
+            return Value(TypeId::BIGINT, static_cast<int32_t>(val));
         }
         case TypeId::TIMESTAMP: {
-            int32_t val;
-            std::memcpy(&val, src, sizeof(int32_t));
-            return Value(TypeId::TIMESTAMP, val);
+            int64_t val;
+            std::memcpy(&val, src, sizeof(int64_t));
+            return Value(TypeId::TIMESTAMP, static_cast<int32_t>(val));
         }
         case TypeId::DECIMAL: {
             double val;
@@ -78,6 +101,8 @@ Value Value::DeserializeFrom(const char *src, TypeId type) {
             return Value(TypeId::DECIMAL, val);
         }
         case TypeId::VARCHAR: {
+            // For tuple data, use Tuple::GetValue which knows length.
+            // Fallback: treat src as null-terminated.
             return Value(TypeId::VARCHAR, std::string(src));
         }
         default:
@@ -86,9 +111,16 @@ Value Value::DeserializeFrom(const char *src, TypeId type) {
 }
 
 std::ostream &operator<<(std::ostream &os, const Value &val) {
-    if (val.type_id_ == TypeId::VARCHAR) os << val.string_val_;
-    else if (val.type_id_ == TypeId::DECIMAL) os << val.decimal_;
-    else os << val.integer_;
+    if (val.type_id_ == TypeId::VARCHAR) {
+        os << val.string_val_;
+    } else if (val.type_id_ == TypeId::DECIMAL) {
+        os << val.decimal_;
+    } else if (val.type_id_ == TypeId::INTEGER || val.type_id_ == TypeId::BIGINT || 
+               val.type_id_ == TypeId::TIMESTAMP || val.type_id_ == TypeId::BOOLEAN) {
+        os << val.integer_;
+    } else {
+        os << "<INVALID>";
+    }
     return os;
 }
 

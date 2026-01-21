@@ -6,53 +6,103 @@ namespace francodb {
     void TablePage::Init(page_id_t page_id, page_id_t prev_id, page_id_t next_id, Transaction *txn) {
         (void) txn;
 
-        // FIX: Actually use page_id to initialize the base Page metadata
-        // This assumes TablePage inherits from Page (which it does)
-        // Note: TablePage::Init usually runs ON TOP of a Page that BufferPool already Init-ed.
-        // So we don't strictly *need* to call Page::Init here, but using the variable silences the warning.
-        // Let's just silence it or double-set it. Double-setting is safer.
         page_id_ = page_id;
 
+        // Get data pointer and verify it's valid
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) {
+            return; // Cannot initialize null page
+        }
+
+        // CRITICAL: Zero the entire header starting after checksum
+        // Header layout: Checksum(4) | PrevPageId(4) | NextPageId(4) | FreeSpacePtr(4) | TupleCount(4)
+        // We skip checksum and zero the rest
+        size_t header_start = OFFSET_CHECKSUM + sizeof(page_id_t); // Start after checksum
+        size_t header_size = SIZE_HEADER - header_start;  // Size of fields to zero
+        
+        // Validate bounds before memset
+        if (header_start + header_size > SIZE_HEADER) {
+            return; // Safety check
+        }
+        
+        memset(data + header_start, 0, header_size);
+
         // Write Header Fields
-        memcpy(GetData() + OFFSET_PREV_PAGE, &prev_id, sizeof(page_id_t));
-        memcpy(GetData() + OFFSET_NEXT_PAGE, &next_id, sizeof(page_id_t));
+        memcpy(data + OFFSET_PREV_PAGE, &prev_id, sizeof(page_id_t));
+        memcpy(data + OFFSET_NEXT_PAGE, &next_id, sizeof(page_id_t));
 
         uint32_t free_ptr = PAGE_SIZE;
         SetFreeSpacePointer(free_ptr);
         SetTupleCount(0);
+        
+        // Mark page as dirty since we modified it - this ensures checksum gets recalculated on flush
+        SetDirty(true);
     }
 
     // --- Getters / Setters ---
     page_id_t TablePage::GetNextPageId() {
-        return *reinterpret_cast<page_id_t *>(GetData() + OFFSET_NEXT_PAGE);
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) return INVALID_PAGE_ID;
+        return *reinterpret_cast<page_id_t *>(data + OFFSET_NEXT_PAGE);
     }
 
     void TablePage::SetNextPageId(page_id_t next_page_id) {
-        memcpy(GetData() + OFFSET_NEXT_PAGE, &next_page_id, sizeof(page_id_t));
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) return;
+        memcpy(data + OFFSET_NEXT_PAGE, &next_page_id, sizeof(page_id_t));
     }
 
     page_id_t TablePage::GetPrevPageId() {
-        return *reinterpret_cast<page_id_t *>(GetData() + OFFSET_PREV_PAGE);
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) return INVALID_PAGE_ID;
+        return *reinterpret_cast<page_id_t *>(data + OFFSET_PREV_PAGE);
     }
 
     void TablePage::SetPrevPageId(page_id_t prev_page_id) {
-        memcpy(GetData() + OFFSET_PREV_PAGE, &prev_page_id, sizeof(page_id_t));
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) return;
+        memcpy(data + OFFSET_PREV_PAGE, &prev_page_id, sizeof(page_id_t));
     }
 
     uint32_t TablePage::GetTupleCount() {
-        return *reinterpret_cast<uint32_t *>(GetData() + OFFSET_TUPLE_COUNT);
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) {
+            return 0; // Safety: null page has 0 tuples
+        }
+        
+        uint32_t count = *reinterpret_cast<uint32_t *>(data + OFFSET_TUPLE_COUNT);
+        // Sanity check: tuple count should not be so large that slot array exceeds page size
+        uint32_t max_possible_tuples = (PAGE_SIZE - SIZE_HEADER) / sizeof(Slot);
+        if (count > max_possible_tuples) {
+            return 0; // Corrupted - return 0 to prevent crashes
+        }
+        return count;
     }
 
     void TablePage::SetTupleCount(uint32_t count) {
-        memcpy(GetData() + OFFSET_TUPLE_COUNT, &count, sizeof(uint32_t));
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) return;
+        memcpy(data + OFFSET_TUPLE_COUNT, &count, sizeof(uint32_t));
     }
 
     uint32_t TablePage::GetFreeSpacePointer() {
-        return *reinterpret_cast<uint32_t *>(GetData() + OFFSET_FREE_SPACE);
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) {
+            return PAGE_SIZE; // Safety: null page reports full free space
+        }
+        
+        uint32_t ptr = *reinterpret_cast<uint32_t *>(data + OFFSET_FREE_SPACE);
+        // Sanity check: free space pointer should be within valid range
+        if (ptr < SIZE_HEADER || ptr > PAGE_SIZE) {
+            return PAGE_SIZE; // Corrupted - return safe default
+        }
+        return ptr;
     }
 
     void TablePage::SetFreeSpacePointer(uint32_t ptr) {
-        memcpy(GetData() + OFFSET_FREE_SPACE, &ptr, sizeof(uint32_t));
+        uint8_t *data = reinterpret_cast<uint8_t*>(GetData());
+        if (data == nullptr) return;
+        memcpy(data + OFFSET_FREE_SPACE, &ptr, sizeof(uint32_t));
     }
 
     uint32_t TablePage::GetFreeSpaceRemaining() {
@@ -100,7 +150,10 @@ namespace francodb {
         // 6. Update Header
         SetTupleCount(tuple_count + 1);
 
-        // 7. Return RID
+        // 7. Mark page as dirty - this ensures checksum gets recalculated on flush
+        SetDirty(true);
+
+        // 8. Return RID
         rid->Set(GetPageId(), tuple_count); // Slot ID = Index
         return true;
     }
@@ -109,12 +162,21 @@ namespace francodb {
     bool TablePage::GetTuple(const RID &rid, Tuple *tuple, Transaction *txn) {
         (void) txn;
         uint32_t slot_id = rid.GetSlotId();
-        if (slot_id >= GetTupleCount()) {
+        uint32_t tuple_count = GetTupleCount();
+        
+        if (slot_id >= tuple_count) {
             return false;
         }
 
-        // Read Slot
+        // Calculate slot offset and validate it's within page bounds
         uint32_t slot_offset = SIZE_HEADER + (slot_id * sizeof(Slot));
+        
+        // Prevent buffer overflow if tuple_count is corrupted
+        if (slot_offset + sizeof(Slot) > PAGE_SIZE) {
+            return false; // Slot array extends beyond page
+        }
+
+        // Read Slot
         Slot slot;
         memcpy(&slot, GetData() + slot_offset, sizeof(Slot));
 
@@ -131,6 +193,12 @@ namespace francodb {
             return false; // Invalid size or would exceed page bounds
         }
         
+        // Additional sanity check: slot data should not overlap with slot array
+        uint32_t slot_array_end = SIZE_HEADER + (tuple_count * sizeof(Slot));
+        if (slot.offset < slot_array_end) {
+            return false; // Tuple data overlaps with slot array (corruption)
+        }
+        
         // Read Data
         tuple->DeserializeFrom(GetData() + slot.offset, slot.size);
         tuple->SetRid(rid);
@@ -141,12 +209,19 @@ namespace francodb {
     bool TablePage::MarkDelete(const RID &rid, Transaction *txn) {
         (void) txn;
         uint32_t slot_id = rid.GetSlotId();
-        if (slot_id >= GetTupleCount()) {
+        uint32_t tuple_count = GetTupleCount();
+        
+        if (slot_id >= tuple_count) {
             return false;
         }
 
-        // 1. Calculate offset to the specific slot
+        // 1. Calculate offset to the specific slot and validate
         uint32_t slot_offset = SIZE_HEADER + (slot_id * sizeof(Slot));
+        
+        // Prevent buffer overflow if tuple_count is corrupted
+        if (slot_offset + sizeof(Slot) > PAGE_SIZE) {
+            return false; // Slot array extends beyond page
+        }
 
         // 2. Read the slot
         Slot slot;
@@ -161,18 +236,28 @@ namespace francodb {
         // 4. Write it back
         memcpy(GetData() + slot_offset, &slot, sizeof(Slot));
 
+        // 5. Mark page as dirty - this ensures checksum gets recalculated on flush
+        SetDirty(true);
+
         return true;
     }
     
     bool TablePage::UnmarkDelete(const RID &rid, Transaction *txn) {
         (void) txn;
         uint32_t slot_id = rid.GetSlotId();
-        if (slot_id >= GetTupleCount()) {
+        uint32_t tuple_count = GetTupleCount();
+        
+        if (slot_id >= tuple_count) {
             return false;
         }
 
-        // 1. Calculate offset to the specific slot
+        // 1. Calculate offset to the specific slot and validate
         uint32_t slot_offset = SIZE_HEADER + (slot_id * sizeof(Slot));
+        
+        // Prevent buffer overflow if tuple_count is corrupted
+        if (slot_offset + sizeof(Slot) > PAGE_SIZE) {
+            return false; // Slot array extends beyond page
+        }
 
         // 2. Read the slot
         Slot slot;
@@ -186,6 +271,9 @@ namespace francodb {
 
         // 4. Write it back
         memcpy(GetData() + slot_offset, &slot, sizeof(Slot));
+
+        // 5. Mark page as dirty - this ensures checksum gets recalculated on flush
+        SetDirty(true);
 
         return true;
     }
