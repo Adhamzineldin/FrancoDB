@@ -3,15 +3,25 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
+#include <atomic>
 #include "common/config.h"
 #include "common/rwlatch.h" // <--- 1. Include the Latch Definition
 
 namespace francodb {
 
+    // LSN type for WAL tracking
+    using lsn_t = int32_t;
+    static constexpr lsn_t INVALID_LSN = -1;
+
     /**
      * Page Class
      * The generic container for a 4KB block of memory.
      * NOW THREAD-SAFE!
+     * 
+     * WAL PROTOCOL:
+     * - Every modification to a page sets the page_lsn_ to the LSN of the log record
+     * - Before flushing a page to disk, the log must be flushed up to page_lsn_
+     * - This ensures recoverability after crashes
      */
     class Page {
         // BufferPoolManager needs access to private members
@@ -26,6 +36,10 @@ namespace francodb {
         inline page_id_t GetPageId() { return page_id_; }
         inline int GetPinCount() { return pin_count_; }
         inline bool IsDirty() { return is_dirty_; }
+        
+        // --- LSN Accessors (for WAL protocol) ---
+        inline lsn_t GetPageLSN() const { return page_lsn_; }
+        inline void SetPageLSN(lsn_t lsn) { page_lsn_ = lsn; }
     
         // --- Mutators ---
         inline void SetDirty(bool dirty) { is_dirty_ = dirty; }
@@ -41,6 +55,7 @@ namespace francodb {
             page_id_ = page_id;
             pin_count_ = 0;
             is_dirty_ = false;
+            page_lsn_ = INVALID_LSN;
         }
 
         inline void ResetMemory() {
@@ -82,7 +97,12 @@ namespace francodb {
         int pin_count_ = 0;
         bool is_dirty_ = false;
         
-        // 3. The Latch (RAM Only)
+        // 3. LSN Tracking (RAM Only - for WAL protocol)
+        // This is the LSN of the last log record that modified this page.
+        // Before flushing to disk, the log must be flushed up to this LSN.
+        lsn_t page_lsn_ = INVALID_LSN;
+        
+        // 4. The Latch (RAM Only)
         // This protects the content of 'data_' from race conditions.
         ReaderWriterLatch rwlatch_; 
     };

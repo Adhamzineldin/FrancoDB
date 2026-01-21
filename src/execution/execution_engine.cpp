@@ -50,7 +50,9 @@ namespace francodb {
 
     Transaction *ExecutionEngine::GetCurrentTransactionForWrite() {
         if (current_transaction_ == nullptr) {
-            current_transaction_ = new Transaction(next_txn_id_++);
+            // Atomic increment ensures unique transaction IDs under concurrency
+            int txn_id = next_txn_id_.fetch_add(1, std::memory_order_relaxed);
+            current_transaction_ = new Transaction(txn_id);
         }
         return current_transaction_;
     }

@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <atomic>
 #include "execution/execution_result.h"
 #include "execution/executor_context.h"
 #include "parser/statement.h"
@@ -89,7 +90,9 @@ namespace francodb {
         LogManager *log_manager_; // [ACID]
         ExecutorContext *exec_ctx_;
         Transaction *current_transaction_;
-        int next_txn_id_;
-        bool in_explicit_transaction_;
+        
+        // Cache-line aligned to prevent false sharing with hot-path pointers above
+        alignas(64) std::atomic<int> next_txn_id_{1};
+        alignas(64) bool in_explicit_transaction_;
     };
 } // namespace francodb

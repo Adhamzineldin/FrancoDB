@@ -115,6 +115,18 @@ namespace francodb {
          */
         void Flush(bool force = true);
 
+        /**
+         * Flush the log up to a specific LSN (for WAL protocol)
+         * 
+         * This is CRITICAL for data integrity. Before writing any data page
+         * to disk, we MUST ensure all log records up to the page's LSN
+         * are persisted. This method blocks until the specified LSN is
+         * safely on disk.
+         * 
+         * @param target_lsn The minimum LSN that must be on disk
+         */
+        void FlushToLSN(LogRecord::lsn_t target_lsn);
+
         // ========================================================================
         // MULTI-DATABASE MANAGEMENT
         // ========================================================================

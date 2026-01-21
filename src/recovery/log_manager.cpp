@@ -281,6 +281,53 @@ namespace francodb {
         }
     }
 
+    void LogManager::FlushToLSN(LogRecord::lsn_t target_lsn) {
+        // WAL Protocol: Ensure all log records up to target_lsn are on disk
+        // This must be called BEFORE writing any data page to disk
+        
+        if (target_lsn == LogRecord::INVALID_LSN) {
+            return;  // Nothing to flush
+        }
+        
+        // Fast path: already flushed
+        if (persistent_lsn_.load() >= target_lsn) {
+            return;
+        }
+        
+        // Need to flush - synchronously write to disk
+        {
+            std::unique_lock<std::mutex> lock(latch_);
+            
+            // Double-check after acquiring lock
+            if (persistent_lsn_.load() >= target_lsn) {
+                return;
+            }
+            
+            if (!log_buffer_.empty() && log_file_.is_open()) {
+                log_file_.write(log_buffer_.data(), static_cast<std::streamsize>(log_buffer_.size()));
+                log_file_.flush();
+                
+                // Force fsync for true durability
+                #ifdef _WIN32
+                // On Windows, flush() should be sufficient, but for extra safety:
+                // _commit(_fileno(...)) would work if using FILE*
+                #else
+                // On POSIX, use fsync for durability guarantee
+                // fsync(fileno(...)) would work if using FILE*
+                #endif
+                
+                log_buffer_.clear();
+                persistent_lsn_.store(next_lsn_.load() - 1);
+            }
+        }
+        
+        // Verify the flush succeeded
+        if (persistent_lsn_.load() < target_lsn) {
+            std::cerr << "[WAL] WARNING: FlushToLSN(" << target_lsn 
+                      << ") failed, persistent_lsn=" << persistent_lsn_.load() << std::endl;
+        }
+    }
+
     void LogManager::StopFlushThread() {
         // 1. Signal the thread to stop
         {

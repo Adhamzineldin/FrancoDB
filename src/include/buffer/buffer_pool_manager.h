@@ -12,6 +12,9 @@
 
 namespace francodb {
 
+    // Forward declaration
+    class LogManager;
+
     class BufferPoolManager {
     public:
         BufferPoolManager(size_t pool_size, DiskManager *disk_manager);
@@ -25,6 +28,13 @@ namespace francodb {
         void FlushAllPages();
         
         DiskManager *GetDiskManager() { return disk_manager_; }
+        
+        /**
+         * Set the log manager for WAL protocol enforcement.
+         * When set, FlushPage will ensure the log is flushed
+         * up to the page's LSN before writing data.
+         */
+        void SetLogManager(LogManager* log_manager) { log_manager_ = log_manager; }
 
         void Clear();
 
@@ -34,6 +44,7 @@ namespace francodb {
         size_t pool_size_;
         Page *pages_;
         DiskManager *disk_manager_;
+        LogManager *log_manager_ = nullptr;  // Optional - for WAL protocol
     
         // Changed from LRUReplacer* to Replacer* (Polymorphism!)
         Replacer *replacer_; 

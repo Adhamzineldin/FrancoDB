@@ -4,6 +4,7 @@
 #include "common/config.h"
 #include "storage/page/free_page_manager.h"
 #include "storage/disk/disk_manager.h"
+#include "recovery/log_manager.h"  // For WAL protocol enforcement
 
 namespace francodb {
     BufferPoolManager::BufferPoolManager(size_t pool_size, DiskManager *disk_manager)
@@ -44,6 +45,13 @@ namespace francodb {
         if (replacer_->Victim(out_frame_id)) {
             Page *victim_page = &pages_[*out_frame_id];
             if (victim_page->IsDirty()) {
+                // WAL PROTOCOL: Flush log before data
+                if (log_manager_ != nullptr) {
+                    lsn_t page_lsn = victim_page->GetPageLSN();
+                    if (page_lsn != INVALID_LSN) {
+                        log_manager_->FlushToLSN(page_lsn);
+                    }
+                }
                 disk_manager_->WritePage(victim_page->GetPageId(), victim_page->GetData());
             }
             page_table_.erase(victim_page->GetPageId());
@@ -165,6 +173,23 @@ namespace francodb {
         if (page_table_.find(page_id) == page_table_.end()) return false;
         frame_id_t frame_id = page_table_[page_id];
         Page *page = &pages_[frame_id];
+        
+        // ========================================================================
+        // WAL PROTOCOL ENFORCEMENT (Critical for crash recovery!)
+        // ========================================================================
+        // Before writing ANY data page to disk, we MUST ensure all log records
+        // up to this page's LSN are already on disk. Otherwise, if we crash:
+        //   - Data on disk reflects the change
+        //   - Log on disk does NOT have the change
+        //   - Recovery fails (can't redo or undo!)
+        // ========================================================================
+        if (log_manager_ != nullptr) {
+            lsn_t page_lsn = page->GetPageLSN();
+            if (page_lsn != INVALID_LSN) {
+                log_manager_->FlushToLSN(page_lsn);
+            }
+        }
+        
         // Update checksum before writing
         UpdatePageChecksum(page->GetData(), page_id);
         disk_manager_->WritePage(page_id, page->GetData());
@@ -186,6 +211,12 @@ namespace francodb {
 
     void BufferPoolManager::FlushAllPages() {
         std::lock_guard<std::mutex> guard(latch_);
+        
+        // WAL PROTOCOL: First, flush entire log to ensure all records are durable
+        if (log_manager_ != nullptr) {
+            log_manager_->Flush(true);
+        }
+        
         for (auto const &[page_id, frame_id]: page_table_) {
             if (page_id == 0) continue; // Never flush or write page 0
             Page *page = &pages_[frame_id];
