@@ -26,6 +26,8 @@ namespace francodb {
         
         DiskManager *GetDiskManager() { return disk_manager_; }
 
+        void Clear();
+
     private:
         bool FindFreeFrame(frame_id_t *out_frame_id);
 

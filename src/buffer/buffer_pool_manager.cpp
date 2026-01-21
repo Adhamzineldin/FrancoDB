@@ -197,4 +197,31 @@ namespace francodb {
             }
         }
     }
+    
+    void BufferPoolManager::Clear() {
+        std::lock_guard<std::mutex> guard(latch_);
+
+        // 1. Reset Page Table (Forget where pages are)
+        page_table_.clear();
+
+        // 2. Reset All Frames
+        for (size_t i = 0; i < pool_size_; ++i) {
+            pages_[i].Init(INVALID_PAGE_ID);
+            pages_[i].pin_count_ = 0;
+            pages_[i].is_dirty_ = false;
+        }
+
+        // 3. Reset Free List (All frames are now free)
+        free_list_.clear();
+        for (size_t i = 0; i < pool_size_; ++i) {
+            free_list_.push_back(static_cast<frame_id_t>(i));
+        }
+
+        // 4. Reset Replacer (Clear LRU history)
+        if (replacer_) {
+            delete replacer_;
+            // Re-instantiate based on your config logic
+            replacer_ = new LRUReplacer(pool_size_); 
+        }
+    }
 } // namespace francodb

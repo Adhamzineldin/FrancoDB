@@ -180,15 +180,21 @@ namespace francodb {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             if (running_) {
-                std::cout << "[SERVER] Auto-Checkpointing..." << std::endl;
-                if (bpm_) bpm_->FlushAllPages();
-                if (catalog_) catalog_->SaveCatalog();
-                if (system_bpm_) system_bpm_->FlushAllPages();
-                if (system_catalog_) system_catalog_->SaveCatalog();
-                if (running_) {
-                    // Execute Real Checkpoint
+                std::cout << "[SERVER] Auto-Checkpoint Initiating..." << std::endl;
+                
+                {
+                    std::unique_lock<std::shared_mutex> lock(ExecutionEngine::global_lock_);
+                    
+                    if (bpm_) bpm_->FlushAllPages();
+                    if (catalog_) catalog_->SaveCatalog();
+                    if (system_bpm_) system_bpm_->FlushAllPages();
+                    if (system_catalog_) system_catalog_->SaveCatalog();
+                    
                     cp_manager.BeginCheckpoint();
-                }
+                
+                } // Lock releases here -> Transactions resume automatically.
+
+                std::cout << "[SERVER] Auto-Checkpoint Complete." << std::endl;
             }
         }
     }

@@ -53,6 +53,7 @@ void TestConsistencyClient();
 void TestStressClient();
 void TestRecovery();
 void TestTimeTravel();
+void TestCheckpoint();
 
 int main(int, char**) {
     using namespace francodb_test;
@@ -122,6 +123,8 @@ int main(int, char**) {
     runner.RunTest("System", "Stress Client", [] { TestStressClient(); });
     runner.RunTest("System", "Log Manager", [] { TestRecovery(); });
     runner.RunTest("System", "Time Travel Test", [] { TestTimeTravel(); });
+    runner.RunTest("System", "Time Travel Test", [] { TestCheckpoint(); });
+
 
     // INTEGRATION
     std::cout << "\n╔═══ INTEGRATION ═══╗" << std::endl;

@@ -19,11 +19,13 @@
 
 namespace francodb {
     struct SessionContext;
+    std::shared_mutex ExecutionEngine::global_lock_;
+
 
     SessionContext *g_session_context = nullptr;
 
     ExecutionEngine::ExecutionEngine(BufferPoolManager *bpm, Catalog *catalog,
-                                     AuthManager *auth_manager, DatabaseRegistry *db_registry, 
+                                     AuthManager *auth_manager, DatabaseRegistry *db_registry,
                                      LogManager *log_manager)
         : bpm_(bpm), catalog_(catalog), auth_manager_(auth_manager),
           db_registry_(db_registry), log_manager_(log_manager), exec_ctx_(nullptr),
@@ -49,14 +51,35 @@ namespace francodb {
     void ExecutionEngine::AutoCommitIfNeeded() {
         if (!in_explicit_transaction_ && current_transaction_ != nullptr &&
             current_transaction_->GetState() == Transaction::TransactionState::RUNNING) {
-            ExecuteCommit(); 
-            }
+            ExecuteCommit();
+        }
     }
 
-    // --- MAIN EXECUTE DISPATCHER ---
-    // --- MAIN EXECUTE DISPATCHER ---
+
     ExecutionResult ExecutionEngine::Execute(Statement *stmt, SessionContext *session) {
         if (stmt == nullptr) return ExecutionResult::Error("Empty Statement");
+
+        // =================================================================================
+        // [ENTERPRISE] CONCURRENCY GATEKEEPER
+        // =================================================================================
+
+        // Pointer to the lock we might acquire
+        std::unique_lock<std::shared_mutex> exclusive_lock;
+        std::shared_lock<std::shared_mutex> shared_lock;
+
+        // Check the statement type to decide locking strategy
+        bool requires_exclusive = (stmt->GetType() == StatementType::RECOVER ||
+                                   stmt->GetType() == StatementType::CHECKPOINT);
+
+        if (requires_exclusive) {
+            // STOP THE WORLD: Wait for all queries to finish, then block new ones.
+            exclusive_lock = std::unique_lock<std::shared_mutex>(global_lock_);
+        } else {
+            // SHARED ACCESS: Allow concurrent execution, but fail if System is recovering.
+            shared_lock = std::shared_lock<std::shared_mutex>(global_lock_);
+        }
+
+        // =================================================================================
 
         try {
             ExecutionResult res;
@@ -67,7 +90,6 @@ namespace francodb {
                 case StatementType::CREATE: res = ExecuteCreate(dynamic_cast<CreateStatement *>(stmt));
                     break;
                 case StatementType::DROP:
-                    // Protect system database from table drops
                     if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
                         return ExecutionResult::Error("Cannot drop tables in system database");
                     }
@@ -78,7 +100,7 @@ namespace francodb {
                 case StatementType::CREATE_USER:
                     res = ExecuteCreateUser(dynamic_cast<CreateUserStatement *>(stmt));
                     break;
-                case StatementType::ALTER_USER_ROLE: // [FIX] Added Case
+                case StatementType::ALTER_USER_ROLE:
                     res = ExecuteAlterUserRole(dynamic_cast<AlterUserRoleStatement *>(stmt));
                     break;
                 case StatementType::DELETE_USER:
@@ -87,7 +109,6 @@ namespace francodb {
 
                 // --- DML ---
                 case StatementType::INSERT:
-                    // Protect system database from modifications
                     if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
                         return ExecutionResult::Error("Cannot modify system database tables");
                     }
@@ -96,14 +117,12 @@ namespace francodb {
                 case StatementType::SELECT: res = ExecuteSelect(dynamic_cast<SelectStatement *>(stmt));
                     break;
                 case StatementType::DELETE_CMD:
-                    // Protect system database from modifications
                     if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
                         return ExecutionResult::Error("Cannot modify system database tables");
                     }
                     res = ExecuteDelete(dynamic_cast<DeleteStatement *>(stmt));
                     break;
                 case StatementType::UPDATE_CMD:
-                    // Protect system database from modifications
                     if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
                         return ExecutionResult::Error("Cannot modify system database tables");
                     }
@@ -124,7 +143,7 @@ namespace francodb {
                     break;
                 case StatementType::SHOW_USERS: res = ExecuteShowUsers(dynamic_cast<ShowUsersStatement *>(stmt));
                     break;
-                case StatementType::DESCRIBE_TABLE: 
+                case StatementType::DESCRIBE_TABLE:
                     res = ExecuteDescribeTable(dynamic_cast<DescribeTableStatement *>(stmt));
                     break;
                 case StatementType::SHOW_CREATE_TABLE:
@@ -147,51 +166,50 @@ namespace francodb {
                     auto *create_db = dynamic_cast<CreateDatabaseStatement *>(stmt);
                     return ExecuteCreateDatabase(create_db, session);
                 }
-
                 case StatementType::USE_DB: {
                     auto *use_db = dynamic_cast<UseDatabaseStatement *>(stmt);
                     return ExecuteUseDatabase(use_db, session);
                 }
-
                 case StatementType::DROP_DB: {
                     auto *drop_db = dynamic_cast<DropDatabaseStatement *>(stmt);
                     return ExecuteDropDatabase(drop_db, session);
                 }
 
                 case StatementType::CREATE_TABLE: {
-                    // Check if database is selected
                     if (session->current_db.empty()) {
                         return ExecutionResult::Error("No database selected. Use 'USE DATABASE_NAME' first.");
                     }
-                    // Prevent creating tables in reserved francodb/system unless superadmin
-                    if ((session->current_db == "francodb" || session->current_db == "system") && session->role != UserRole::SUPERADMIN) {
-                        return ExecutionResult::Error("Cannot create tables in reserved database: " + session->current_db);
+                    if ((session->current_db == "francodb" || session->current_db == "system") && session->role !=
+                        UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error(
+                            "Cannot create tables in reserved database: " + session->current_db);
                     }
                     auto *create = dynamic_cast<CreateStatement *>(stmt);
                     return ExecuteCreate(create);
                 }
-                    
+
+                // --- RECOVERY OPS (Protected by Exclusive Lock above) ---
                 case StatementType::CHECKPOINT:
                     return ExecuteCheckpoint();
-            
+
                 case StatementType::RECOVER:
-                    return ExecuteRecover(dynamic_cast<RecoverStatement*>(stmt));
+                    return ExecuteRecover(dynamic_cast<RecoverStatement *>(stmt));
 
                 default: return ExecutionResult::Error("Unknown Statement Type in Engine.");
             }
 
-            // Auto-commit
-            if (stmt->GetType() == StatementType::INSERT || stmt->GetType() == StatementType::UPDATE_CMD || stmt->
-                GetType() == StatementType::DELETE_CMD) {
+            // Auto-commit for single statements
+            if (stmt->GetType() == StatementType::INSERT ||
+                stmt->GetType() == StatementType::UPDATE_CMD ||
+                stmt->GetType() == StatementType::DELETE_CMD) {
                 AutoCommitIfNeeded();
             }
             return res;
         } catch (const std::exception &e) {
-            
             if (current_transaction_ && current_transaction_->GetState() == Transaction::TransactionState::RUNNING) {
-                // Force Rollback to release locks
+                // Force Rollback to release row-level locks
                 bool was_explicit = in_explicit_transaction_;
-                in_explicit_transaction_ = true; 
+                in_explicit_transaction_ = true;
                 ExecuteRollback();
                 in_explicit_transaction_ = was_explicit;
             }
@@ -208,48 +226,48 @@ namespace francodb {
 
     ExecutionResult ExecutionEngine::ExecuteCreate(CreateStatement *stmt) {
         Schema schema(stmt->columns_);
-        
+
         // Validate foreign keys BEFORE creating the table
-        for (const auto &fk : stmt->foreign_keys_) {
+        for (const auto &fk: stmt->foreign_keys_) {
             // Check if referenced table exists
             TableMetadata *ref_table = catalog_->GetTable(fk.ref_table);
             if (!ref_table) {
                 return ExecutionResult::Error("Referenced table does not exist: " + fk.ref_table);
             }
-            
+
             // Check if all referenced columns exist in the referenced table
-            for (const auto &ref_col : fk.ref_columns) {
+            for (const auto &ref_col: fk.ref_columns) {
                 int col_idx = ref_table->schema_.GetColIdx(ref_col);
                 if (col_idx < 0) {
-                    return ExecutionResult::Error("Referenced column '" + ref_col + 
-                                                "' does not exist in table '" + fk.ref_table + "'");
+                    return ExecutionResult::Error("Referenced column '" + ref_col +
+                                                  "' does not exist in table '" + fk.ref_table + "'");
                 }
             }
-            
+
             // Check if all local columns exist in the table being created
-            for (const auto &local_col : fk.columns) {
+            for (const auto &local_col: fk.columns) {
                 bool found = false;
-                for (const auto &col : stmt->columns_) {
+                for (const auto &col: stmt->columns_) {
                     if (col.GetName() == local_col) {
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    return ExecutionResult::Error("Foreign key column '" + local_col + 
-                                                "' does not exist in table definition");
+                    return ExecutionResult::Error("Foreign key column '" + local_col +
+                                                  "' does not exist in table definition");
                 }
             }
         }
-        
+
         TableMetadata *table_info = catalog_->CreateTable(stmt->table_name_, schema);
         if (!table_info) {
             return ExecutionResult::Error("Table already exists: " + stmt->table_name_);
         }
-        
+
         // Store foreign keys in table metadata
         table_info->foreign_keys_ = stmt->foreign_keys_;
-        
+
         return ExecutionResult::Message("CREATE TABLE SUCCESS");
     }
 
@@ -278,35 +296,35 @@ namespace francodb {
             // Create executor for left table (main table)
             auto left_executor = std::unique_ptr<AbstractExecutor>(
                 new SeqScanExecutor(exec_ctx_, stmt, GetCurrentTransaction()));
-            
+
             // For each join, create a right executor and wrap in JoinExecutor
-            for (const auto &join_clause : stmt->joins_) {
+            for (const auto &join_clause: stmt->joins_) {
                 // Create a temporary SelectStatement for the right table
                 auto right_stmt = std::make_unique<SelectStatement>();
                 right_stmt->select_all_ = true;
                 right_stmt->table_name_ = join_clause.table_name;
-                
+
                 auto right_executor = std::unique_ptr<AbstractExecutor>(
                     new SeqScanExecutor(exec_ctx_, right_stmt.get(), GetCurrentTransaction()));
-                
+
                 // Parse join condition (simplified: assumes format "table1.col1 = table2.col2")
                 std::vector<JoinCondition> conditions;
                 if (!join_clause.condition.empty()) {
                     // Simple parsing of join condition
                     // Expected format: "table1.col1 = table2.col2" or "col1 = col2"
                     JoinCondition cond;
-                    
+
                     size_t eq_pos = join_clause.condition.find('=');
                     if (eq_pos != std::string::npos) {
                         std::string left_part = join_clause.condition.substr(0, eq_pos);
                         std::string right_part = join_clause.condition.substr(eq_pos + 1);
-                        
+
                         // Trim whitespace
                         left_part.erase(0, left_part.find_first_not_of(" \t"));
                         left_part.erase(left_part.find_last_not_of(" \t") + 1);
                         right_part.erase(0, right_part.find_first_not_of(" \t"));
                         right_part.erase(right_part.find_last_not_of(" \t") + 1);
-                        
+
                         // Parse left side
                         size_t dot_pos = left_part.find('.');
                         if (dot_pos != std::string::npos) {
@@ -316,7 +334,7 @@ namespace francodb {
                             cond.left_table = stmt->table_name_;
                             cond.left_column = left_part;
                         }
-                        
+
                         // Parse right side
                         dot_pos = right_part.find('.');
                         if (dot_pos != std::string::npos) {
@@ -326,25 +344,25 @@ namespace francodb {
                             cond.right_table = join_clause.table_name;
                             cond.right_column = right_part;
                         }
-                        
+
                         cond.op = "=";
                         conditions.push_back(cond);
                     }
                 }
-                
+
                 // Determine join type
                 JoinType join_type = JoinType::INNER;
                 if (join_clause.join_type == "LEFT") join_type = JoinType::LEFT;
                 else if (join_clause.join_type == "RIGHT") join_type = JoinType::RIGHT;
                 else if (join_clause.join_type == "CROSS") join_type = JoinType::CROSS;
                 else if (join_clause.join_type == "FULL") join_type = JoinType::FULL;
-                
+
                 // Wrap in JoinExecutor
                 left_executor = std::unique_ptr<AbstractExecutor>(
                     new JoinExecutor(exec_ctx_, std::move(left_executor), std::move(right_executor),
-                                   join_type, conditions, GetCurrentTransaction()));
+                                     join_type, conditions, GetCurrentTransaction()));
             }
-            
+
             executor = left_executor.release();
         } else {
             // Optimizer Logic (Simplified) - only if no joins
@@ -408,7 +426,7 @@ namespace francodb {
         }
 
         // 2. Collect all rows first (needed for DISTINCT, ORDER BY, GROUP BY, LIMIT)
-        std::vector<std::vector<std::string>> all_rows;
+        std::vector<std::vector<std::string> > all_rows;
         Tuple t;
         while (executor->Next(&t)) {
             std::vector<std::string> row_strings;
@@ -421,18 +439,18 @@ namespace francodb {
 
         // 3. Apply DISTINCT if requested
         if (stmt->is_distinct_) {
-            std::set<std::vector<std::string>> unique_rows(all_rows.begin(), all_rows.end());
+            std::set<std::vector<std::string> > unique_rows(all_rows.begin(), all_rows.end());
             all_rows.assign(unique_rows.begin(), unique_rows.end());
         }
 
         // 4. Apply GROUP BY if present
         if (!stmt->group_by_columns_.empty()) {
             // Group rows by specified columns
-            std::map<std::vector<std::string>, std::vector<std::vector<std::string>>> grouped_data;
-            
-            for (const auto &row : all_rows) {
+            std::map<std::vector<std::string>, std::vector<std::vector<std::string> > > grouped_data;
+
+            for (const auto &row: all_rows) {
                 std::vector<std::string> group_key;
-                for (const auto &group_col : stmt->group_by_columns_) {
+                for (const auto &group_col: stmt->group_by_columns_) {
                     // Find column index in result set
                     auto it = std::find(rs->column_names.begin(), rs->column_names.end(), group_col);
                     if (it != rs->column_names.end()) {
@@ -444,10 +462,10 @@ namespace francodb {
                 }
                 grouped_data[group_key].push_back(row);
             }
-            
+
             // For now, just return first row of each group (simplified aggregation)
             all_rows.clear();
-            for (const auto &[key, group] : grouped_data) {
+            for (const auto &[key, group]: grouped_data) {
                 if (!group.empty()) {
                     all_rows.push_back(group[0]);
                 }
@@ -456,40 +474,41 @@ namespace francodb {
 
         // 5. Apply ORDER BY if present
         if (!stmt->order_by_.empty()) {
-            std::sort(all_rows.begin(), all_rows.end(), 
-                [&](const std::vector<std::string> &a, const std::vector<std::string> &b) {
-                    for (const auto &order_clause : stmt->order_by_) {
-                        // Find column index
-                        auto it = std::find(rs->column_names.begin(), rs->column_names.end(), order_clause.column);
-                        if (it != rs->column_names.end()) {
-                            size_t idx = std::distance(rs->column_names.begin(), it);
-                            if (idx < a.size() && idx < b.size()) {
-                                // Try numeric comparison first
-                                try {
-                                    double val_a = std::stod(a[idx]);
-                                    double val_b = std::stod(b[idx]);
-                                    if (val_a != val_b) {
-                                        if (order_clause.direction == "DESC") {
-                                            return val_a > val_b;
-                                        } else {
-                                            return val_a < val_b;
-                                        }
-                                    }
-                                } catch (...) {
-                                    // Fall back to string comparison
-                                    if (a[idx] != b[idx]) {
-                                        if (order_clause.direction == "DESC") {
-                                            return a[idx] > b[idx];
-                                        } else {
-                                            return a[idx] < b[idx];
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return false;
-                });
+            std::sort(all_rows.begin(), all_rows.end(),
+                      [&](const std::vector<std::string> &a, const std::vector<std::string> &b) {
+                          for (const auto &order_clause: stmt->order_by_) {
+                              // Find column index
+                              auto it = std::find(rs->column_names.begin(), rs->column_names.end(),
+                                                  order_clause.column);
+                              if (it != rs->column_names.end()) {
+                                  size_t idx = std::distance(rs->column_names.begin(), it);
+                                  if (idx < a.size() && idx < b.size()) {
+                                      // Try numeric comparison first
+                                      try {
+                                          double val_a = std::stod(a[idx]);
+                                          double val_b = std::stod(b[idx]);
+                                          if (val_a != val_b) {
+                                              if (order_clause.direction == "DESC") {
+                                                  return val_a > val_b;
+                                              } else {
+                                                  return val_a < val_b;
+                                              }
+                                          }
+                                      } catch (...) {
+                                          // Fall back to string comparison
+                                          if (a[idx] != b[idx]) {
+                                              if (order_clause.direction == "DESC") {
+                                                  return a[idx] > b[idx];
+                                              } else {
+                                                  return a[idx] < b[idx];
+                                              }
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                          return false;
+                      });
         }
 
         // 6. Apply OFFSET
@@ -501,7 +520,7 @@ namespace francodb {
         // 7. Apply LIMIT and add rows to result set
         size_t count = 0;
         size_t max_count = (stmt->limit_ > 0) ? static_cast<size_t>(stmt->limit_) : all_rows.size();
-        
+
         for (size_t i = start_idx; i < all_rows.size() && count < max_count; i++) {
             rs->AddRow(all_rows[i]);
             count++;
@@ -534,18 +553,20 @@ namespace francodb {
     ExecutionResult ExecutionEngine::ExecuteBegin() {
         if (current_transaction_ && in_explicit_transaction_) return ExecutionResult::Error("Transaction in progress");
         if (current_transaction_) ExecuteCommit();
-        
+
         current_transaction_ = new Transaction(next_txn_id_++);
         in_explicit_transaction_ = true;
 
         // [ACID] Log BEGIN
         if (log_manager_) {
-            LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(), LogRecordType::BEGIN);
+            LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(),
+                          LogRecordType::BEGIN);
             auto lsn = log_manager_->AppendLogRecord(rec);
             current_transaction_->SetPrevLSN(lsn);
         }
 
-        return ExecutionResult::Message("BEGIN TRANSACTION " + std::to_string(current_transaction_->GetTransactionId()));
+        return ExecutionResult::Message(
+            "BEGIN TRANSACTION " + std::to_string(current_transaction_->GetTransactionId()));
     }
 
     ExecutionResult ExecutionEngine::ExecuteRollback() {
@@ -554,7 +575,8 @@ namespace francodb {
 
         // [ACID] Log ABORT (Before rolling back memory)
         if (log_manager_) {
-            LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(), LogRecordType::ABORT);
+            LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(),
+                          LogRecordType::ABORT);
             log_manager_->AppendLogRecord(rec);
             // No flush needed for abort usually
         }
@@ -583,10 +605,10 @@ namespace francodb {
 
     ExecutionResult ExecutionEngine::ExecuteCommit() {
         if (current_transaction_) {
-            
             // [ACID] Log COMMIT and FLUSH
             if (log_manager_) {
-                LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(), LogRecordType::COMMIT);
+                LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(),
+                              LogRecordType::COMMIT);
                 log_manager_->AppendLogRecord(rec);
                 // FORCE FLUSH ensures Durability
                 log_manager_->Flush(true);
@@ -636,14 +658,14 @@ namespace francodb {
                 std::string db_name;
                 if (entry.is_directory()) {
                     db_name = entry.path().filename().string();
-                    
+
                     // Verify it's a valid database directory (contains .francodb file)
                     fs::path db_file = entry.path() / (db_name + ".francodb");
                     if (!fs::exists(db_file)) {
-                        continue;  // Skip if no .francodb file inside
+                        continue; // Skip if no .francodb file inside
                     }
                 }
-                
+
                 if (!db_name.empty() && db_name != "system") {
                     if (auth_manager_->HasDatabaseAccess(session->current_user, db_name)) {
                         db_names.insert(db_name);
@@ -653,7 +675,7 @@ namespace francodb {
         }
 
         // Add all unique database names to result set
-        for (const auto &db_name : db_names) {
+        for (const auto &db_name: db_names) {
             rs->AddRow({db_name});
         }
 
@@ -751,14 +773,14 @@ namespace francodb {
         try {
             // Get all table names from the current catalog
             std::vector<std::string> table_names = catalog_->GetAllTableNames();
-            
+
             // Sort for nice output
             std::sort(table_names.begin(), table_names.end());
-            
-            for (const auto &name : table_names) {
+
+            for (const auto &name: table_names) {
                 rs->AddRow({name});
             }
-            
+
             return ExecutionResult::Data(rs);
         } catch (const std::exception &e) {
             return ExecutionResult::Error("Failed to retrieve tables: " + std::string(e.what()));
@@ -948,7 +970,7 @@ namespace francodb {
             std::filesystem::path db_dir = std::filesystem::path(data_dir) / stmt->db_name_;
 
             if (std::filesystem::exists(db_dir) && std::filesystem::is_directory(db_dir)) {
-                std::filesystem::remove_all(db_dir);  // Recursively delete directory and contents
+                std::filesystem::remove_all(db_dir); // Recursively delete directory and contents
             }
 
             return ExecutionResult::Message("Database '" + stmt->db_name_ + "' dropped successfully");
@@ -972,32 +994,35 @@ namespace francodb {
         const Schema &schema = table_info->schema_;
         for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
             const Column &col = schema.GetColumn(i);
-            
+
             // Field name
             std::string field = col.GetName();
-            
+
             // Type
             std::string type;
             switch (col.GetType()) {
-                case TypeId::INTEGER: type = "RAKAM"; break;
-                case TypeId::DECIMAL: type = "KASR"; break;
-                case TypeId::VARCHAR: type = "GOMLA(" + std::to_string(col.GetLength()) + ")"; break;
-                default: type = "UNKNOWN"; break;
+                case TypeId::INTEGER: type = "RAKAM";
+                    break;
+                case TypeId::DECIMAL: type = "KASR";
+                    break;
+                case TypeId::VARCHAR: type = "GOMLA(" + std::to_string(col.GetLength()) + ")";
+                    break;
+                default: type = "UNKNOWN";
+                    break;
             }
-            
+
             // Null
             std::string null_str = col.IsNullable() ? "YES" : "NO";
-            
+
             // Key
             std::string key_str;
             if (col.IsPrimaryKey()) key_str = "PRI";
             else if (col.IsUnique()) key_str = "UNI";
             else key_str = "";
-            
+
             // Default
-            std::string default_str = col.HasDefaultValue() ? 
-                ValueToString(col.GetDefaultValue().value()) : "NULL";
-            
+            std::string default_str = col.HasDefaultValue() ? ValueToString(col.GetDefaultValue().value()) : "NULL";
+
             // Extra - includes CHECK, AUTO_INCREMENT, and FOREIGN KEY info
             std::string extra;
             if (col.IsAutoIncrement()) extra = "AUTO_INCREMENT";
@@ -1005,10 +1030,10 @@ namespace francodb {
                 if (!extra.empty()) extra += ", ";
                 extra += "CHECK(" + col.GetCheckConstraint() + ")";
             }
-            
+
             // Check if this column is part of a foreign key
-            for (const auto &fk : table_info->foreign_keys_) {
-                for (const auto &fk_col : fk.columns) {
+            for (const auto &fk: table_info->foreign_keys_) {
+                for (const auto &fk_col: fk.columns) {
                     if (fk_col == col.GetName()) {
                         if (!extra.empty()) extra += ", ";
                         extra += "FK(" + fk.ref_table + "." + fk.ref_columns[0] + ")";
@@ -1016,7 +1041,7 @@ namespace francodb {
                     }
                 }
             }
-            
+
             rs->AddRow({field, type, null_str, key_str, default_str, extra});
         }
 
@@ -1036,50 +1061,54 @@ namespace francodb {
         rs->column_names = {"Table", "Create Table"};
 
         std::string create_sql = "2E3MEL GADWAL " + stmt->table_name_ + " (\n";
-        
+
         const Schema &schema = table_info->schema_;
         for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
             const Column &col = schema.GetColumn(i);
-            
+
             create_sql += "  " + col.GetName() + " ";
-            
+
             // Type
             switch (col.GetType()) {
-                case TypeId::INTEGER: create_sql += "RAKAM"; break;
-                case TypeId::DECIMAL: create_sql += "KASR"; break;
-                case TypeId::VARCHAR: create_sql += "GOMLA"; break;
-                default: create_sql += "UNKNOWN"; break;
+                case TypeId::INTEGER: create_sql += "RAKAM";
+                    break;
+                case TypeId::DECIMAL: create_sql += "KASR";
+                    break;
+                case TypeId::VARCHAR: create_sql += "GOMLA";
+                    break;
+                default: create_sql += "UNKNOWN";
+                    break;
             }
-            
+
             // Primary key
             if (col.IsPrimaryKey()) create_sql += " ASASI";
-            
+
             // Nullable
             if (!col.IsNullable()) create_sql += " NOT NULL";
-            
+
             // Unique
             if (col.IsUnique()) create_sql += " UNIQUE";
-            
+
             // Auto increment
             if (col.IsAutoIncrement()) create_sql += " AUTO_INCREMENT";
-            
+
             // Check constraint
             if (col.HasCheckConstraint()) {
                 create_sql += " FA7S (" + col.GetCheckConstraint() + ")";
             }
-            
+
             // Default value
             if (col.HasDefaultValue()) {
                 create_sql += " DEFAULT " + ValueToString(col.GetDefaultValue().value());
             }
-            
+
             if (i < schema.GetColumnCount() - 1) create_sql += ",";
             create_sql += "\n";
         }
-        
+
         // Add foreign keys
         if (!table_info->foreign_keys_.empty()) {
-            for (const auto &fk : table_info->foreign_keys_) {
+            for (const auto &fk: table_info->foreign_keys_) {
                 create_sql += "  , FOREIGN KEY (";
                 for (size_t j = 0; j < fk.columns.size(); j++) {
                     if (j > 0) create_sql += ", ";
@@ -1093,9 +1122,9 @@ namespace francodb {
                 create_sql += ")\n";
             }
         }
-        
+
         create_sql += ");";
-        
+
         rs->AddRow({stmt->table_name_, create_sql});
         return ExecutionResult::Data(rs);
     }
@@ -1104,12 +1133,11 @@ namespace francodb {
     // ALTER TABLE
     // ====================================================================
     ExecutionResult ExecutionEngine::ExecuteAlterTable(AlterTableStatement *stmt) {
-        return ExecutionResult::Error("ALTER TABLE is not fully implemented yet. Use DROP and CREATE to modify schema.");
+        return ExecutionResult::Error(
+            "ALTER TABLE is not fully implemented yet. Use DROP and CREATE to modify schema.");
     }
-    
-    
-    
-    
+
+
     ExecutionResult ExecutionEngine::ExecuteCheckpoint() {
         // Permission Check (Optional: restrict to Admin)
         // if (!auth_manager_->HasPermission(UserRole::ADMIN, StatementType::CHECKPOINT_CMD)) ...
@@ -1119,17 +1147,49 @@ namespace francodb {
         return ExecutionResult::Message("CHECKPOINT SUCCESS");
     }
 
-    
+
     //TODO FIX "THE REAL DB SHIT"
-    ExecutionResult ExecutionEngine::ExecuteRecover(RecoverStatement* stmt) {
-        // WARNING: This is a destructive operation.
-        // In a real DB, we would ensure no other transactions are running.
-        
+    ExecutionResult ExecutionEngine::ExecuteRecover(RecoverStatement *stmt) {
+        // 1. Permission Check (Must be SuperAdmin)
+        // (Assuming you have access to the session here, otherwise enforce strict server-side rules)
+
+        std::cout << "[SYSTEM] Requesting Global Exclusive Lock for Time Travel..." << std::endl;
+
+        // 2. STOP THE WORLD (Acquire Write Lock)
+        // This blocks until all active queries finish, and prevents new ones from starting.
+        std::unique_lock<std::shared_mutex> lock(global_lock_);
+
+        std::cout << "[SYSTEM] Global Lock Acquired. Quiescing system..." << std::endl;
+
+        // 3. Force Buffer Pool Flush
+        // We ensure the current state is safely on disk before we mess with it.
+        bpm_->FlushAllPages();
+
+        // 4. Close External Connections (Optional but recommended)
+        // In a real system, you might disconnect users here. 
+        // For now, the lock prevents them from doing anything.
+
+        // 5. Perform Recovery
+        // We are now in Single-User Mode. It is safe to rewrite memory and disk.
         std::cout << "[SYSTEM] Initiating Time Travel to: " << stmt->timestamp_ << std::endl;
-        
-        RecoveryManager recovery(log_manager_);
-        recovery.RecoverToTime(stmt->timestamp_);
-        
+
+        try {
+            // Reset Buffer Pool (Clear memory cache so we don't read old future pages)
+            // (You might need to add Clear() to BPM, or just unpin everything)
+            bpm_->Clear();
+
+            RecoveryManager recovery(log_manager_);
+            recovery.RecoverToTime(stmt->timestamp_);
+
+            // 6. Force Checkpoint
+            // We save the "New Past" as the canonical state.
+            CheckpointManager cp_mgr(bpm_, log_manager_);
+            cp_mgr.BeginCheckpoint();
+        } catch (const std::exception &e) {
+            return ExecutionResult::Error(std::string("Recovery Failed: ") + e.what());
+        }
+
+        std::cout << "[SYSTEM] Time Travel Complete. Resuming normal operations." << std::endl;
         return ExecutionResult::Message("TIME TRAVEL COMPLETE. System state reverted.");
     }
 } // namespace francodb

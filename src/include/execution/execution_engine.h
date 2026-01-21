@@ -16,6 +16,7 @@
 namespace francodb {
     class ExecutionEngine {
     public:
+        static std::shared_mutex global_lock_;
         // [ACID] Updated Constructor
         ExecutionEngine(BufferPoolManager *bpm, Catalog *catalog, AuthManager *auth_manager, 
                         DatabaseRegistry *db_registry, LogManager *log_manager);
