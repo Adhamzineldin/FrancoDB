@@ -8,6 +8,7 @@
 #include "buffer/buffer_pool_manager.h"
 #include "network/database_registry.h"
 #include "parser/statement.h" // Needed for StatementType
+#include "recovery/log_manager.h" 
 
 namespace francodb {
     class AuthManager; // Forward declaration
@@ -33,7 +34,8 @@ namespace francodb {
 
     class AuthManager {
     public:
-        AuthManager(BufferPoolManager *system_bpm, Catalog *system_catalog, DatabaseRegistry *db_registry);
+        AuthManager(BufferPoolManager *system_bpm, Catalog *system_catalog, 
+                    DatabaseRegistry *db_registry, LogManager *log_manager);
 
         ~AuthManager();
 
@@ -77,6 +79,7 @@ namespace francodb {
         Catalog *system_catalog_;
         ExecutionEngine *system_engine_; // Owns a private engine for system queries
         DatabaseRegistry *db_registry_;
+        LogManager *log_manager_; // [ACID]
 
         std::unordered_map<std::string, UserInfo> users_cache_;
         bool initialized_;

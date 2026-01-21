@@ -19,12 +19,13 @@
 #include "network/database_registry.h"
 #include "network/protocol.h"
 #include "parser/parser.h" // Ensure you have this for StatementType
+#include "recovery/log_manager.h"
 
 namespace francodb {
 
     class FrancoServer {
     public:
-        FrancoServer(BufferPoolManager* bpm, Catalog* catalog);
+        FrancoServer(BufferPoolManager *bpm, Catalog *catalog, LogManager *log_manager);
         ~FrancoServer();
 
         void Start(int port);
@@ -48,6 +49,7 @@ namespace francodb {
         // Core Components
         BufferPoolManager* bpm_;
         Catalog* catalog_;
+        LogManager *log_manager_;
         
         // System Components
         std::unique_ptr<DiskManager> system_disk_;

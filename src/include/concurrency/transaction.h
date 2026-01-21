@@ -3,8 +3,10 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <string>
 #include "common/rid.h"
 #include "storage/table/tuple.h"
+#include "recovery/log_record.h" // [ACID] Needed for LogRecord::lsn_t
 
 namespace francodb {
 
@@ -13,7 +15,10 @@ namespace francodb {
      */
     class Transaction {
     public:
-        Transaction(int txn_id) : txn_id_(txn_id), state_(TransactionState::RUNNING) {}
+        // [ACID] Update Constructor to initialize LSN
+        Transaction(int txn_id) 
+            : txn_id_(txn_id), state_(TransactionState::RUNNING), 
+              prev_lsn_(LogRecord::INVALID_LSN) {} // Start with -1
         
         int GetTransactionId() const { return txn_id_; }
         
@@ -25,6 +30,10 @@ namespace francodb {
         
         TransactionState GetState() const { return state_; }
         void SetState(TransactionState state) { state_ = state; }
+
+        // [ACID] Methods to track the Log Chain
+        void SetPrevLSN(LogRecord::lsn_t lsn) { prev_lsn_ = lsn; }
+        LogRecord::lsn_t GetPrevLSN() const { return prev_lsn_; }
         
         // Track modified tuples for rollback
         struct TupleModification {
@@ -49,6 +58,11 @@ namespace francodb {
     private:
         int txn_id_;
         TransactionState state_;
+        
+        // [ACID] The LSN of the last log record written by this transaction
+        // This links all logs for this specific transaction together.
+        LogRecord::lsn_t prev_lsn_;
+
         std::unordered_map<RID, TupleModification> modifications_; // Track all tuple changes
     };
 }

@@ -239,8 +239,17 @@ bool UpdateExecutor::Next(Tuple *tuple) {
         
         // Track new tuple for rollback (new RID - this is an INSERT that needs to be deleted on rollback)
         if (txn_) {
-            Tuple empty_tuple;
-            txn_->AddModifiedTuple(new_rid, empty_tuple, false, plan_->table_name_);
+            txn_->AddModifiedTuple(update.old_rid, update.old_tuple, false, plan_->table_name_);
+            
+            // [ACID] WRITE-AHEAD LOGGING
+            // Extract the target column value for Undo/Redo
+            int col_idx = table_info_->schema_.GetColIdx(plan_->target_column_);
+            Value old_val = update.old_tuple.GetValue(table_info_->schema_, col_idx);
+            Value new_val = update.new_tuple.GetValue(table_info_->schema_, col_idx);
+            
+            LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), LogRecordType::UPDATE, plan_->table_name_, old_val, new_val);
+            LogRecord::lsn_t lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
+            txn_->SetPrevLSN(lsn);
         }
         
         // D. Add new tuple to indexes

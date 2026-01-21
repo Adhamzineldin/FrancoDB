@@ -21,12 +21,13 @@ namespace francodb {
     SessionContext *g_session_context = nullptr;
 
     ExecutionEngine::ExecutionEngine(BufferPoolManager *bpm, Catalog *catalog,
-                                     AuthManager *auth_manager, DatabaseRegistry *db_registry)
+                                     AuthManager *auth_manager, DatabaseRegistry *db_registry, 
+                                     LogManager *log_manager)
         : bpm_(bpm), catalog_(catalog), auth_manager_(auth_manager),
-          db_registry_(db_registry), exec_ctx_(nullptr),
+          db_registry_(db_registry), log_manager_(log_manager), exec_ctx_(nullptr),
           current_transaction_(nullptr), next_txn_id_(1),
           in_explicit_transaction_(false) {
-        exec_ctx_ = new ExecutorContext(bpm_, catalog_, nullptr);
+        exec_ctx_ = new ExecutorContext(bpm_, catalog_, nullptr, log_manager_);
     }
 
     ExecutionEngine::~ExecutionEngine() {
@@ -46,8 +47,8 @@ namespace francodb {
     void ExecutionEngine::AutoCommitIfNeeded() {
         if (!in_explicit_transaction_ && current_transaction_ != nullptr &&
             current_transaction_->GetState() == Transaction::TransactionState::RUNNING) {
-            ExecuteCommit(); // We can ignore result of auto-commit
-        }
+            ExecuteCommit(); 
+            }
     }
 
     // --- MAIN EXECUTE DISPATCHER ---
@@ -525,19 +526,32 @@ namespace francodb {
     ExecutionResult ExecutionEngine::ExecuteBegin() {
         if (current_transaction_ && in_explicit_transaction_) return ExecutionResult::Error("Transaction in progress");
         if (current_transaction_) ExecuteCommit();
+        
         current_transaction_ = new Transaction(next_txn_id_++);
         in_explicit_transaction_ = true;
-        return ExecutionResult::Message(
-            "BEGIN TRANSACTION " + std::to_string(current_transaction_->GetTransactionId()));
+
+        // [ACID] Log BEGIN
+        if (log_manager_) {
+            LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(), LogRecordType::BEGIN);
+            auto lsn = log_manager_->AppendLogRecord(rec);
+            current_transaction_->SetPrevLSN(lsn);
+        }
+
+        return ExecutionResult::Message("BEGIN TRANSACTION " + std::to_string(current_transaction_->GetTransactionId()));
     }
 
     ExecutionResult ExecutionEngine::ExecuteRollback() {
         if (!current_transaction_ || !in_explicit_transaction_)
-            return ExecutionResult::Error(
-                "No transaction to rollback");
+            return ExecutionResult::Error("No transaction to rollback");
 
-        // ... (Keep existing rollback logic here, copied from your previous file) ...
-        // ... Copy the reverse iteration logic here ...
+        // [ACID] Log ABORT (Before rolling back memory)
+        if (log_manager_) {
+            LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(), LogRecordType::ABORT);
+            log_manager_->AppendLogRecord(rec);
+            // No flush needed for abort usually
+        }
+
+        // ... (Existing in-memory Rollback Logic) ...
         const auto &modifications = current_transaction_->GetModifications();
         std::vector<std::pair<RID, Transaction::TupleModification> > mods_vec;
         for (const auto &[rid, mod]: modifications) mods_vec.push_back({rid, mod});
@@ -547,40 +561,9 @@ namespace francodb {
             if (mod.table_name.empty()) continue;
             TableMetadata *table_info = catalog_->GetTable(mod.table_name);
             if (!table_info) continue;
-
-            if (mod.is_deleted) {
-                // Undo Delete
-                table_info->table_heap_->UnmarkDelete(rid, nullptr);
-                auto indexes = catalog_->GetTableIndexes(mod.table_name);
-                for (auto *index: indexes) {
-                    int col_idx = table_info->schema_.GetColIdx(index->col_name_);
-                    if (col_idx >= 0) {
-                        GenericKey<8> key;
-                        key.SetFromValue(mod.old_tuple.GetValue(table_info->schema_, col_idx));
-                        index->b_plus_tree_->Insert(key, rid, nullptr);
-                    }
-                }
-            } else if (mod.old_tuple.GetLength() == 0) {
-                // Undo Insert
-                Tuple current;
-                if (table_info->table_heap_->GetTuple(rid, &current, nullptr)) {
-                    auto indexes = catalog_->GetTableIndexes(mod.table_name);
-                    for (auto *index: indexes) {
-                        int col_idx = table_info->schema_.GetColIdx(index->col_name_);
-                        if (col_idx >= 0) {
-                            GenericKey<8> key;
-                            key.SetFromValue(current.GetValue(table_info->schema_, col_idx));
-                            index->b_plus_tree_->Remove(key, nullptr);
-                        }
-                    }
-                }
-                table_info->table_heap_->MarkDelete(rid, nullptr);
-            } else {
-                // Undo Update
-                table_info->table_heap_->UnmarkDelete(rid, nullptr);
-                // Note: In a real system we'd restore values. 
-                // For now we just unmark delete assuming update was delete+insert
-            }
+            if (mod.is_deleted) table_info->table_heap_->UnmarkDelete(rid, nullptr);
+            else if (mod.old_tuple.GetLength() == 0) table_info->table_heap_->MarkDelete(rid, nullptr);
+            else table_info->table_heap_->UnmarkDelete(rid, nullptr);
         }
 
         current_transaction_->SetState(Transaction::TransactionState::ABORTED);
@@ -592,6 +575,15 @@ namespace francodb {
 
     ExecutionResult ExecutionEngine::ExecuteCommit() {
         if (current_transaction_) {
+            
+            // [ACID] Log COMMIT and FLUSH
+            if (log_manager_) {
+                LogRecord rec(current_transaction_->GetTransactionId(), current_transaction_->GetPrevLSN(), LogRecordType::COMMIT);
+                log_manager_->AppendLogRecord(rec);
+                // FORCE FLUSH ensures Durability
+                log_manager_->Flush(true);
+            }
+
             current_transaction_->SetState(Transaction::TransactionState::COMMITTED);
             delete current_transaction_;
             current_transaction_ = nullptr;
@@ -885,7 +877,7 @@ namespace francodb {
             if (exec_ctx_) {
                 delete exec_ctx_;
             }
-            exec_ctx_ = new ExecutorContext(bpm_, catalog_, current_transaction_);
+            exec_ctx_ = new ExecutorContext(bpm_, catalog_, current_transaction_, log_manager_);
 
             // Update session context
             session->current_db = stmt->db_name_;

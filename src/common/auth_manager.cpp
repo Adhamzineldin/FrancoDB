@@ -48,15 +48,16 @@ namespace francodb {
     // -------------------------------------------------------------------------
     // Constructor / Destructor
     // -------------------------------------------------------------------------
-    AuthManager::AuthManager(BufferPoolManager *system_bpm, Catalog *system_catalog, DatabaseRegistry *db_registry)
+    AuthManager::AuthManager(BufferPoolManager *system_bpm, Catalog *system_catalog, 
+                             DatabaseRegistry *db_registry, LogManager *log_manager)
      : system_bpm_(system_bpm), 
        system_catalog_(system_catalog), 
-       db_registry_(db_registry), // Initialize member
+       db_registry_(db_registry),
+       log_manager_(log_manager), // [ACID]
        initialized_(false) {
     
-        // [FIX] Pass 'this' (AuthManager) AND 'db_registry' to the engine
-        // The ExecutionEngine constructor requires: (bpm, catalog, auth, db_registry)
-        system_engine_ = new ExecutionEngine(system_bpm_, system_catalog_, this, db_registry_);
+        // [FIX] Now passing 5 arguments including log_manager
+        system_engine_ = new ExecutionEngine(system_bpm_, system_catalog_, this, db_registry_, log_manager_);
     
         InitializeSystemDatabase();
         LoadUsers();

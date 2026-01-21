@@ -91,8 +91,18 @@ bool DeleteExecutor::Next(Tuple *tuple) {
         
         // B. Delete from table (only if not already deleted)
         bool deleted = table_info_->table_heap_->MarkDelete(rid, txn_);
-        if (deleted) {
-            count++;
+        if (deleted && txn_) {
+            txn_->AddModifiedTuple(rid, tuple, true, plan_->table_name_);
+            
+            // [ACID] WRITE-AHEAD LOGGING
+            Value old_val; 
+            if (table_info_->schema_.GetColumnCount() > 0) {
+                old_val = tuple.GetValue(table_info_->schema_, 0); // Log first column
+            }
+            
+            LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), LogRecordType::APPLY_DELETE, plan_->table_name_, old_val);
+            LogRecord::lsn_t lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
+            txn_->SetPrevLSN(lsn);
         }
     }
 

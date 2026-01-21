@@ -4,6 +4,8 @@
 #include <string>
 #include <cstring>
 #include <iostream>
+#include <sstream>
+
 #include "common/type.h"
 #include "common/exception.h"
 
@@ -42,6 +44,14 @@ namespace francodb {
 
         friend std::ostream &operator<<(std::ostream &os, const Value &val);
         bool CompareEquals(const Value &other) const;
+        
+        std::string ToString() const {
+            std::ostringstream oss;
+            // Assuming you already have operator<< overloaded for Value
+            // If not, you might need to implement a switch(type_id_) here.
+            oss << (*this); 
+            return oss.str();
+        }
 
     private:
         TypeId type_id_;

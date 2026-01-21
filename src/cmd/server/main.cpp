@@ -151,6 +151,9 @@ int main(int argc, char *argv[]) {
 
         auto bpm = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, disk_manager.get());
         auto catalog = std::make_unique<Catalog>(bpm.get());
+        
+        auto log_manager = std::make_unique<LogManager>((system_dir / "franco.log").string());
+        std::cout << "[INFO] Log Manager initialized at: " << (system_dir / "franco.log").string() << std::endl;
 
         if (catalog->GetAllTableNames().empty()) {
             try { catalog->LoadCatalog(); } catch (...) {
@@ -158,7 +161,7 @@ int main(int argc, char *argv[]) {
         }
 
         // 3. START SERVER
-        g_Server = std::make_unique<FrancoServer>(bpm.get(), catalog.get());
+        g_Server = std::make_unique<FrancoServer>(bpm.get(), catalog.get(), log_manager.get());
         std::cout << "[READY] FrancoDB Server listening on port " << config.GetPort() << "..." << std::endl;
 
         // === BLOCKING CALL === 
@@ -187,6 +190,10 @@ int main(int argc, char *argv[]) {
             catalog->SaveCatalog();
         }
 
+        
+        
+        
+        log_manager->StopFlushThread();
         // 5. DESTROY SERVER LOGIC
         // Destroy server first so no new requests try to use the DB
         g_Server.reset();

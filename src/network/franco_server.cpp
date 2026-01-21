@@ -23,6 +23,7 @@ typedef int socket_t;
 #include "common/config.h"
 #include "common/franco_net_config.h"
 #include "network/database_registry.h"
+#include "recovery/log_manager.h" // [FIX] Include LogManager
 
 #include <iostream>
 #include <cstring>
@@ -32,24 +33,19 @@ typedef int socket_t;
 #include <chrono>
 #include <thread>
 
-// Helper to check system db corruption
-// static bool IsFileCorrupt(const std::string& path) {
-//     if (!std::filesystem::exists(path)) return false; 
-//     return std::filesystem::file_size(path) == 0;     
-// }
-
 namespace francodb {
-    FrancoServer::FrancoServer(BufferPoolManager *bpm, Catalog *catalog)
-        : bpm_(bpm), catalog_(catalog) {
+    
+    // [FIX] Accept LogManager pointer in Constructor
+    FrancoServer::FrancoServer(BufferPoolManager *bpm, Catalog *catalog, LogManager *log_manager)
+        : bpm_(bpm), catalog_(catalog), log_manager_(log_manager) {
         try {
-            // [FIX 1] Initialize Registry FIRST, before System Resources
-            // AuthManager (inside InitializeSystemResources) now depends on registry_
+            // Initialize Registry FIRST
             registry_ = std::make_unique<DatabaseRegistry>();
             
-            // Register the default DB immediately
+            // Register the default DB
             registry_->RegisterExternal("default", bpm_, catalog_);
 
-            // [FIX 2] Now call this, so AuthManager can receive the valid registry_ pointer
+            // Initialize Auth & System Resources
             InitializeSystemResources();
 
             // Thread Pool
@@ -58,7 +54,7 @@ namespace francodb {
             thread_pool_ = std::make_unique<ThreadPool>(pool_size);
             
         } catch (const std::exception &e) {
-            std::cerr << "[CRITICAL] System DB Corrupt. Self-healing..." << std::endl;
+            std::cerr << "[CRITICAL] System Init Failed: " << e.what() << std::endl;
         }
     }
 
@@ -112,8 +108,6 @@ namespace francodb {
             sockaddr_in client_addr{};
             socklen_t len = sizeof(client_addr);
 
-            // Note: ThreadPool handles tasks fast, so blocking accept is usually okay.
-            // Keeping select() logic for clean shutdown support.
 #ifdef _WIN32
             fd_set readSet;
             FD_ZERO(&readSet);
@@ -124,14 +118,14 @@ namespace francodb {
             int selectResult = select(0, &readSet, nullptr, nullptr, &timeout);
             if (selectResult > 0 && FD_ISSET(s, &readSet)) {
 #else
-                fd_set readSet;
-                FD_ZERO(&readSet);
-                FD_SET(s, &readSet);
-                timeval timeout;
-                timeout.tv_sec = 1;
-                timeout.tv_usec = 0;
-                int selectResult = select(s + 1, &readSet, nullptr, nullptr, &timeout);
-                if (selectResult > 0 && FD_ISSET(s, &readSet)) { 
+            fd_set readSet;
+            FD_ZERO(&readSet);
+            FD_SET(s, &readSet);
+            timeval timeout;
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
+            int selectResult = select(s + 1, &readSet, nullptr, nullptr, &timeout);
+            if (selectResult > 0 && FD_ISSET(s, &readSet)) { 
 #endif
                 socket_t client_sock = accept(s, (struct sockaddr *) &client_addr, &len);
                 if (client_sock != INVALID_SOCK && running_) {
@@ -161,6 +155,9 @@ namespace francodb {
         if (registry_) registry_->FlushAllDatabases();
         if (catalog_) catalog_->SaveCatalog();
         if (bpm_) bpm_->FlushAllPages();
+        
+        // [NOTE] LogManager flush is handled in main.cpp usually, or can be added here
+        if (log_manager_) log_manager_->Flush(true);
 
         running_ = false;
         is_running_ = false;
@@ -185,6 +182,8 @@ namespace francodb {
                 if (catalog_) catalog_->SaveCatalog();
                 if (system_bpm_) system_bpm_->FlushAllPages();
                 if (system_catalog_) system_catalog_->SaveCatalog();
+                // [FIX] Auto-flush logs periodically
+                if (log_manager_) log_manager_->Flush(false); 
             }
         }
     }
@@ -193,11 +192,9 @@ namespace francodb {
         auto &config = ConfigManager::GetInstance();
         std::string data_dir = config.GetDataDirectory();
         
-        // 1. Define paths (this was missing in the snippet)
         std::filesystem::path system_dir = std::filesystem::path(data_dir) / "system";
         std::filesystem::path system_db_path = system_dir / "system.francodb";
 
-        // 2. Create directories and check for corruption
         std::filesystem::create_directories(system_dir);
 
         if (std::filesystem::exists(system_db_path) && std::filesystem::file_size(system_db_path) < 4096) {
@@ -205,7 +202,6 @@ namespace francodb {
             std::filesystem::remove(system_db_path);
         }
 
-        // 3. Initialize System Components
         system_disk_ = std::make_unique<DiskManager>(system_db_path.string());
         
         if (config.IsEncryptionEnabled()) {
@@ -215,11 +211,12 @@ namespace francodb {
         system_bpm_ = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, system_disk_.get());
         system_catalog_ = std::make_unique<Catalog>(system_bpm_.get());
 
-        // [FIX] Now we pass registry_.get() here
+        // [FIX] Pass log_manager_ to AuthManager so system internal queries are logged/ACID compliant
         auth_manager_ = std::make_unique<AuthManager>(
             system_bpm_.get(), 
             system_catalog_.get(), 
-            registry_.get()
+            registry_.get(),
+            log_manager_
         );
     }
 
@@ -228,14 +225,11 @@ namespace francodb {
         std::string upper_sql = sql;
         std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
 
-        // 1. WHOAMI
         if (upper_sql.find("WHOAMI") != std::string::npos) {
             return "Current User: " + (handler->IsAuthenticated() ? handler->GetCurrentUser() : "Guest");
         }
 
-        // 2. SHOW DATABASES (SECURE VERSION)
-        if (upper_sql.find("SHOW DATABASES") != std::string::npos || upper_sql.find("WARINI DATABASE") !=
-            std::string::npos) {
+        if (upper_sql.find("SHOW DATABASES") != std::string::npos || upper_sql.find("WARINI DATABASE") != std::string::npos) {
             if (!handler->IsAuthenticated()) {
                 return "ERROR: Authentication required.";
             }
@@ -244,12 +238,10 @@ namespace francodb {
             std::stringstream ss;
             ss << "--- AVAILABLE DATABASES ---\n";
 
-            // Always check if user can see 'default'
             if (auth_manager_->HasDatabaseAccess(user, "francodb")) {
                 ss << "default\n";
             }
 
-            // Scan Data Directory for other DBs
             auto &config = ConfigManager::GetInstance();
             std::filesystem::path data_path(config.GetDataDirectory());
 
@@ -257,10 +249,8 @@ namespace francodb {
                 for (const auto &entry: std::filesystem::directory_iterator(data_path)) {
                     if (entry.is_directory()) {
                         std::string db_name = entry.path().filename().string();
-                        // Skip system folder (internal use only)
                         if (db_name == "system" || db_name == "default") continue;
 
-                        // ASK AUTH MANAGER: Does this user have access?
                         if (auth_manager_->HasDatabaseAccess(user, db_name)) {
                             ss << db_name << "\n";
                         }
@@ -270,19 +260,13 @@ namespace francodb {
             return ss.str();
         }
 
-        // 3. CREATE USER (Delegate to Handler/Auth logic if parser supports it, 
-        //    otherwise rely on ProcessRequest to handle standard SQL statements)
-
-        // 4. Default: Send to Volcano Engine / Connection Handler
         return handler->ProcessRequest(sql);
     }
 
-    // Add this implementation
     void FrancoServer::Stop() {
         running_ = false;
         is_running_ = false;
 
-        // This forces accept() to throw/return, unblocking the main thread
         if (listen_sock_ != 0) {
 #ifdef _WIN32
             shutdown((socket_t) listen_sock_, SD_BOTH);
@@ -296,69 +280,57 @@ namespace francodb {
     }
 
 
-    // src/network/franco_server.cpp
-
     void FrancoServer::HandleClient(uintptr_t client_socket) {
-    socket_t sock = (socket_t) client_socket;
-    
-    // Create fresh engine/handler for this thread
-    auto engine = std::make_unique<ExecutionEngine>(
-        bpm_, 
-        catalog_, 
-        auth_manager_.get(), 
-        registry_.get()
-    );
-    
-    auto handler = std::make_unique<ClientConnectionHandler>(engine.release(), auth_manager_.get());
-
-    while (running_) {
-        PacketHeader header;
-        // 1. Read Request Header
-        int bytes_read = recv(sock, (char *) &header, sizeof(header), MSG_WAITALL);
-        if (bytes_read <= 0) break;
-
-        uint32_t payload_len = ntohl(header.length);
-        if (payload_len > 1024 * 1024 * 10) break; // 10MB Limit
-
-        // 2. Read Request Payload
-        std::vector<char> payload(payload_len);
-        recv(sock, payload.data(), payload_len, MSG_WAITALL);
-
-        std::string sql(payload.begin(), payload.end());
-
-        // 3. Setup Response Format
-        switch (header.type) {
-            case MsgType::CMD_JSON: handler->SetResponseFormat(ProtocolType::JSON); break;
-            case MsgType::CMD_BINARY: handler->SetResponseFormat(ProtocolType::BINARY); break;
-            default: handler->SetResponseFormat(ProtocolType::TEXT); break;
-        }
-
-        // 4. Execute
-        std::string response = DispatchCommand(sql, handler.get());
-
-        // =========================================================
-        // [FIX] SEND PROTOCOL: LENGTH + DATA
-        // =========================================================
-        uint32_t resp_len = htonl(response.size());
+        socket_t sock = (socket_t) client_socket;
         
-        // A. Send Length (4 Bytes)
-        int sent_header = send(sock, (char*)&resp_len, sizeof(resp_len), 0);
-        if (sent_header <= 0) break;
+        // [FIX] Pass log_manager_ to ExecutionEngine
+        auto engine = std::make_unique<ExecutionEngine>(
+            bpm_, 
+            catalog_, 
+            auth_manager_.get(), 
+            registry_.get(),
+            log_manager_
+        );
+        
+        auto handler = std::make_unique<ClientConnectionHandler>(engine.release(), auth_manager_.get());
 
-        // B. Send Body (Loop to ensure full delivery)
-        size_t total_sent = 0;
-        while (total_sent < response.size()) {
-            int sent = send(sock, response.c_str() + total_sent, response.size() - total_sent, 0);
-            if (sent <= 0) break;
-            total_sent += sent;
+        while (running_) {
+            PacketHeader header;
+            int bytes_read = recv(sock, (char *) &header, sizeof(header), MSG_WAITALL);
+            if (bytes_read <= 0) break;
+
+            uint32_t payload_len = ntohl(header.length);
+            if (payload_len > 1024 * 1024 * 10) break; // 10MB Limit
+
+            std::vector<char> payload(payload_len);
+            recv(sock, payload.data(), payload_len, MSG_WAITALL);
+
+            std::string sql(payload.begin(), payload.end());
+
+            switch (header.type) {
+                case MsgType::CMD_JSON: handler->SetResponseFormat(ProtocolType::JSON); break;
+                case MsgType::CMD_BINARY: handler->SetResponseFormat(ProtocolType::BINARY); break;
+                default: handler->SetResponseFormat(ProtocolType::TEXT); break;
+            }
+
+            std::string response = DispatchCommand(sql, handler.get());
+
+            uint32_t resp_len = htonl(response.size());
+            int sent_header = send(sock, (char*)&resp_len, sizeof(resp_len), 0);
+            if (sent_header <= 0) break;
+
+            size_t total_sent = 0;
+            while (total_sent < response.size()) {
+                int sent = send(sock, response.c_str() + total_sent, response.size() - total_sent, 0);
+                if (sent <= 0) break;
+                total_sent += sent;
+            }
         }
-        // =========================================================
-    }
 
 #ifdef _WIN32
-    closesocket(sock);
+        closesocket(sock);
 #else
-    close(sock);
+        close(sock);
 #endif
-}
+    }
 }
