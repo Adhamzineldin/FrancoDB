@@ -10,20 +10,14 @@ namespace francodb {
     public:
         explicit RecoveryManager(LogManager* log_manager) : log_manager_(log_manager) {}
 
-   
-        void ARIES();
+        void RunRecoveryLoop(uint64_t stop_at_time, uint64_t start_offset);
 
-    private:
-        // Helper to deserialize a single log from the buffer
-        // Returns true if successful, false if end of file
-        bool ParseLog(std::ifstream& log_stream, LogRecord& out_record);
+        void ARIES();
+        
+        void RecoverToTime(uint64_t target_time_microseconds);
 
     private:
         LogManager* log_manager_;
-    
-        // For ARIES Analysis Phase:
-        // Keep track of active transactions found in the log
-        std::map<int, int> active_txns_; 
     };
 
 } // namespace francodb

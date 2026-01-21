@@ -5,7 +5,6 @@
 
 namespace francodb {
     
-    
     // Helper: Write a standard string to buffer [4-byte Len][Data]
     void WriteString(std::vector<char> &buffer, const std::string &str) {
         uint32_t len = static_cast<uint32_t>(str.length());
@@ -14,8 +13,7 @@ namespace francodb {
         buffer.insert(buffer.end(), str.begin(), str.end());
     }
 
-    // Helper: Write a Value object to buffer (Simplified for Phase 1)
-    // Format: [4-byte TypeID] [4-byte Len] [Data]
+    // Helper: Write a Value object to buffer
     void WriteValue(std::vector<char> &buffer, const Value &val) {
         try {
             // 1. Write Type
@@ -24,19 +22,14 @@ namespace francodb {
             buffer.insert(buffer.end(), type_ptr, type_ptr + sizeof(int));
 
             // 2. Write Data based on type
-            // Note: For now, we will rely on Value::ToString() for serialization safety.
-            // In Phase 3 (Performance), we will serialize raw bytes (Int/Double directly).
-            // Make a deep copy to avoid use-after-free issues
             std::string s_val;
             try {
                 s_val = val.ToString();
             } catch (...) {
-                // If ToString() fails, use empty string as fallback
                 s_val = "";
             }
             WriteString(buffer, s_val);
         } catch (...) {
-            // If serialization fails, write a minimal placeholder to keep log structure valid
             int type_id = 0;
             const char *type_ptr = reinterpret_cast<const char *>(&type_id);
             buffer.insert(buffer.end(), type_ptr, type_ptr + sizeof(int));
@@ -46,9 +39,6 @@ namespace francodb {
 
     /*
      * Main API: The Transaction Manager calls this.
-     * 1. Assigns LSN.
-     * 2. Serializes data.
-     * 3. Puts it in the RAM buffer.
      */
     LogRecord::lsn_t LogManager::AppendLogRecord(LogRecord &log_record) {
         try {
@@ -58,7 +48,6 @@ namespace francodb {
             log_record.lsn_ = next_lsn_++;
 
             // 2. Calculate offsets for Header
-            // We will construct the binary packet in a temporary buffer first
             std::vector<char> record_buf;
 
             // --- HEADER ---
@@ -79,24 +68,25 @@ namespace francodb {
             ptr = reinterpret_cast<const char *>(&log_record.txn_id_);
             record_buf.insert(record_buf.end(), ptr, ptr + sizeof(LogRecord::txn_id_t));
 
+            // [NEW] Timestamp (8 Bytes) - Insert AFTER TxnID
+            ptr = reinterpret_cast<const char *>(&log_record.timestamp_);
+            record_buf.insert(record_buf.end(), ptr, ptr + sizeof(LogRecord::timestamp_t));
+
             // Log Type
             int type_int = static_cast<int>(log_record.log_record_type_);
             ptr = reinterpret_cast<const char *>(&type_int);
             record_buf.insert(record_buf.end(), ptr, ptr + sizeof(int));
 
             // --- BODY ---
-            // For Insert: Table + NewVal
             if (log_record.log_record_type_ == LogRecordType::INSERT) {
                 WriteString(record_buf, log_record.table_name_);
                 WriteValue(record_buf, log_record.new_value_);
             }
-            // For Update: Table + OldVal + NewVal
             else if (log_record.log_record_type_ == LogRecordType::UPDATE) {
                 WriteString(record_buf, log_record.table_name_);
                 WriteValue(record_buf, log_record.old_value_);
                 WriteValue(record_buf, log_record.new_value_);
             }
-            // For Delete: Table + OldVal
             else if (log_record.log_record_type_ == LogRecordType::APPLY_DELETE ||
                      log_record.log_record_type_ == LogRecordType::MARK_DELETE) {
                 WriteString(record_buf, log_record.table_name_);
@@ -113,82 +103,75 @@ namespace francodb {
 
             return log_record.lsn_;
         } catch (const std::exception &e) {
-            // If logging fails, return an invalid LSN but don't crash
-            // This allows the system to continue even if logging has issues
             std::cerr << "[LogManager] AppendLogRecord failed: " << e.what() << std::endl;
             return LogRecord::INVALID_LSN;
         } catch (...) {
-            // Catch absolutely everything
             std::cerr << "[LogManager] AppendLogRecord failed with unknown error" << std::endl;
             return LogRecord::INVALID_LSN;
         }
     }
+    
+    // Force a specific log record for checkpoints
+    void LogManager::LogCheckpoint() {
+        LogRecord rec(0, 0, LogRecordType::CHECKPOINT_END);
+        AppendLogRecord(rec);
+        Flush(true);
+    }
 
     void LogManager::SwapBuffers() {
-        // Assume Lock is held by caller
         std::swap(log_buffer_, flush_buffer_);
-        // log_buffer_ is now empty and ready for new writes
     }
 
     void LogManager::Flush(bool force) {
         std::unique_lock<std::mutex> lock(latch_);
         if (force) {
-            // Wake up thread immediately
             cv_.notify_one();
-            // In a real system, we might wait here until persistence is confirmed.
-            // For now, notifying is enough.
         } else {
             cv_.notify_one();
         }
     }
 
     void LogManager::StopFlushThread() {
+        // 1. Signal the thread to stop
+        {
+            std::unique_lock<std::mutex> lock(latch_);
+            if (stop_flush_thread_) return;
+            stop_flush_thread_ = true;
+            cv_.notify_all();
+        } 
+        
+        // 2. Wait for the background thread to die
+        if (flush_thread_.joinable()) {
+            flush_thread_.join();
+        }
+        
+        // 3. [CRITICAL FIX] Flush whatever is left in the buffers!
+        // The previous code cleared them; now we WRITE them.
         try {
-            {
-                std::unique_lock<std::mutex> lock(latch_);
-                if (stop_flush_thread_) {
-                    return; // Already stopped
-                }
-                stop_flush_thread_ = true;
-                cv_.notify_all();
-            } // Release lock before joining
+            bool did_write = false;
             
-            // Wait for thread to fully exit - CRITICAL: Must complete before accessing buffers
-            if (flush_thread_.joinable()) {
-                flush_thread_.join();
+            // Check the main buffer
+            if (!log_buffer_.empty()) {
+                log_file_.write(log_buffer_.data(), log_buffer_.size());
+                did_write = true;
+            }
+
+            // Check the swap buffer (in case the thread was mid-swap)
+            if (!flush_buffer_.empty()) {
+                log_file_.write(flush_buffer_.data(), flush_buffer_.size());
+                did_write = true;
+            }
+
+            if (did_write) {
+                log_file_.flush();
             }
             
-            // Thread is DEAD - now safe to access buffers without lock
-            // Don't try to flush remaining data - it's not worth the risk of corruption
-            // The log is best-effort in tests anyway
-            
-            // Just close the file safely
-            try {
-                if (log_file_.is_open()) {
-                    log_file_.close();
-                }
-            } catch (...) {
-                // Ignore close errors
-            }
-            
-            // Clear buffers to release memory
-            try {
-                log_buffer_.clear();
-                flush_buffer_.clear();
-            } catch (...) {
-                // Ignore clear errors
-            }
+            log_file_.close();
         } catch (...) {
-            // Catch absolutely everything - never throw from destructor context
+            // Best effort shutdown
         }
     }
 
-    /*
-     * The Background Thread
-     * 1. Waits for 30ms OR a signal.
-     * 2. Swaps buffers.
-     * 3. Writes to disk.
-     */
     void LogManager::FlushThread() {
         try {
             while (true) {
@@ -197,14 +180,13 @@ namespace francodb {
                 {
                     std::unique_lock<std::mutex> lock(latch_);
 
-                    // Wait for 30ms (Group Commit window) or until buffer is large
+                    // Wait for 30ms or until buffer is large
                     cv_.wait_for(lock, std::chrono::milliseconds(30), [this] {
                         return stop_flush_thread_ || !log_buffer_.empty();
                     });
 
-                    // Check stop flag FIRST before doing anything
                     if (stop_flush_thread_) {
-                        break; // Exit immediately, final flush will be done in StopFlushThread
+                        break; 
                     }
 
                     if (log_buffer_.empty()) {
@@ -212,27 +194,24 @@ namespace francodb {
                     }
 
                     SwapBuffers();
-                    // Copy flush_buffer to local variable to avoid holding lock during I/O
                     local_flush_buffer = std::move(flush_buffer_);
-                } // Lock released here, so other threads can keep appending to log_buffer_
+                } 
 
-                // --- I/O OPERATION (Slow) ---
-                // Wrap in try-catch to prevent exceptions from escaping thread
+                // --- I/O OPERATION ---
                 if (!local_flush_buffer.empty()) {
                     try {
                         if (log_file_.is_open() && log_file_.good()) {
                             log_file_.write(local_flush_buffer.data(), local_flush_buffer.size());
-                            log_file_.flush(); // Essential: Force OS to flush cache to physical disk
+                            log_file_.flush();
                         }
-                    } catch (...) {
-                        // Silently ignore I/O errors in background thread
-                        // Main thread will handle final flush
-                    }
+                    } catch (...) {}
                 }
             }
-        } catch (...) {
-            // Catch absolutely everything to prevent std::terminate
-            // This should never happen, but we're being defensive
-        }
+        } catch (...) {}
     }
+    
+    
+    
+    
+    
 } // namespace francodb

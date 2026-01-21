@@ -51,6 +51,8 @@ void TestRealWorldTraffic();
 void TestFrancoDBSystem();
 void TestConsistencyClient();
 void TestStressClient();
+void TestRecovery();
+void TestTimeTravel();
 
 int main(int, char**) {
     using namespace francodb_test;
@@ -118,6 +120,8 @@ int main(int, char**) {
     runner.RunTest("System", "FrancoDB System", [] { TestFrancoDBSystem(); });
     runner.RunTest("System", "Consistency Client", [] { TestConsistencyClient(); });
     runner.RunTest("System", "Stress Client", [] { TestStressClient(); });
+    runner.RunTest("System", "Log Manager", [] { TestRecovery(); });
+    runner.RunTest("System", "Time Travel Test", [] { TestTimeTravel(); });
 
     // INTEGRATION
     std::cout << "\n╔═══ INTEGRATION ═══╗" << std::endl;

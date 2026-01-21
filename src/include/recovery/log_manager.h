@@ -32,6 +32,8 @@ namespace francodb {
         // Returns the LSN assigned to this record
         LogRecord::lsn_t AppendLogRecord(LogRecord& log_record);
 
+        void LogCheckpoint();
+
         // Forces a write to disk (Used at Commit)
         void Flush(bool force = true);
 

@@ -24,6 +24,7 @@ typedef int socket_t;
 #include "common/franco_net_config.h"
 #include "network/database_registry.h"
 #include "recovery/log_manager.h" // [FIX] Include LogManager
+#include "recovery/checkpoint_manager.h"
 
 #include <iostream>
 #include <cstring>
@@ -173,17 +174,21 @@ namespace francodb {
 
 
     void FrancoServer::AutoSaveLoop() {
+        CheckpointManager cp_manager(bpm_, log_manager_);
         while (running_) {
             for (int i = 0; i < 300 && running_; ++i) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             if (running_) {
+                std::cout << "[SERVER] Auto-Checkpointing..." << std::endl;
                 if (bpm_) bpm_->FlushAllPages();
                 if (catalog_) catalog_->SaveCatalog();
                 if (system_bpm_) system_bpm_->FlushAllPages();
                 if (system_catalog_) system_catalog_->SaveCatalog();
-                // [FIX] Auto-flush logs periodically
-                if (log_manager_) log_manager_->Flush(false); 
+                if (running_) {
+                    // Execute Real Checkpoint
+                    cp_manager.BeginCheckpoint();
+                }
             }
         }
     }
