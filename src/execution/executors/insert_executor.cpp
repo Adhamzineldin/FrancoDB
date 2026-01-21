@@ -355,8 +355,13 @@ bool InsertExecutor::Next(Tuple *tuple) {
         txn_->AddModifiedTuple(rid, empty_tuple, false, plan_->table_name_);
 
         if (exec_ctx_->GetLogManager()) { 
-            Value log_val;
-            if (!reordered_values.empty()) log_val = reordered_values[0];
+            // Serialize ALL values as a pipe-separated string for complete tuple recovery
+            std::string tuple_str;
+            for (size_t i = 0; i < reordered_values.size(); i++) {
+                if (i > 0) tuple_str += "|";
+                tuple_str += reordered_values[i].ToString();
+            }
+            Value log_val(TypeId::VARCHAR, tuple_str);
             
             LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), 
                               LogRecordType::INSERT, plan_->table_name_, log_val);

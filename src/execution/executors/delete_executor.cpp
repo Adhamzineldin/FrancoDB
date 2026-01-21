@@ -95,10 +95,13 @@ bool DeleteExecutor::Next(Tuple *tuple) {
             txn_->AddModifiedTuple(rid, tuple, true, plan_->table_name_);
             
             if (exec_ctx_->GetLogManager()) {
-                Value old_val; 
-                if (table_info_->schema_.GetColumnCount() > 0) {
-                    old_val = tuple.GetValue(table_info_->schema_, 0);
+                // Serialize ALL values as a pipe-separated string for complete tuple recovery
+                std::string tuple_str;
+                for (uint32_t i = 0; i < table_info_->schema_.GetColumnCount(); i++) {
+                    if (i > 0) tuple_str += "|";
+                    tuple_str += tuple.GetValue(table_info_->schema_, i).ToString();
                 }
+                Value old_val(TypeId::VARCHAR, tuple_str);
             
                 LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), 
                                   LogRecordType::APPLY_DELETE, plan_->table_name_, old_val);

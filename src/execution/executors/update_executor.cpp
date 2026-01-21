@@ -242,9 +242,18 @@ bool UpdateExecutor::Next(Tuple *tuple) {
             txn_->AddModifiedTuple(update.old_rid, update.old_tuple, false, plan_->table_name_);
             
             if (exec_ctx_->GetLogManager()) {
-                int col_idx = table_info_->schema_.GetColIdx(plan_->target_column_);
-                Value old_val = update.old_tuple.GetValue(table_info_->schema_, col_idx);
-                Value new_val = update.new_tuple.GetValue(table_info_->schema_, col_idx);
+                // Serialize old and new tuples as pipe-separated strings for complete recovery
+                std::string old_tuple_str, new_tuple_str;
+                for (uint32_t i = 0; i < table_info_->schema_.GetColumnCount(); i++) {
+                    if (i > 0) {
+                        old_tuple_str += "|";
+                        new_tuple_str += "|";
+                    }
+                    old_tuple_str += update.old_tuple.GetValue(table_info_->schema_, i).ToString();
+                    new_tuple_str += update.new_tuple.GetValue(table_info_->schema_, i).ToString();
+                }
+                Value old_val(TypeId::VARCHAR, old_tuple_str);
+                Value new_val(TypeId::VARCHAR, new_tuple_str);
             
                 LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(), 
                                   LogRecordType::UPDATE, plan_->table_name_, old_val, new_val);

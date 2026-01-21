@@ -43,7 +43,7 @@ void TestTimeTravel() {
     std::cout << "\n[2/3] Testing Standard Recovery (Should see 0$)..." << std::endl;
     {
         LogManager log_mgr(log_file);
-        RecoveryManager recovery(&log_mgr);
+        RecoveryManager recovery(&log_mgr, nullptr, nullptr, nullptr);
         recovery.ARIES(); // Recover Everything
     }
 
@@ -51,7 +51,7 @@ void TestTimeTravel() {
     std::cout << "\n[3/3] ACTIVATING TIME MACHINE (Target: " << good_time_stamp << ")..." << std::endl;
     {
         LogManager log_mgr(log_file);
-        RecoveryManager recovery(&log_mgr);
+        RecoveryManager recovery(&log_mgr, nullptr, nullptr, nullptr);
         
         // This is the magic line
         recovery.RecoverToTime(good_time_stamp);

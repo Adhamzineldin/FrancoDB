@@ -43,7 +43,7 @@ namespace francodb {
 
         ExecutionResult ExecuteInsert(InsertStatement *stmt);
 
-        ExecutionResult ExecuteSelect(SelectStatement *stmt);
+        ExecutionResult ExecuteSelect(SelectStatement *stmt, SessionContext *session = nullptr);
 
         ExecutionResult ExecuteDrop(DropStatement *stmt);
 

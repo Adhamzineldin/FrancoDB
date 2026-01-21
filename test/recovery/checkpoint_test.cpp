@@ -46,8 +46,11 @@ void TestCheckpoint() {
     // --- PHASE 2: RECOVERY ---
     std::cout << "\n[2/4] Restarting System..." << std::endl;
     {
+        DiskManager dm(db_file);
+        BufferPoolManager bpm(10, &dm);
         LogManager log_mgr(log_file);
-        RecoveryManager recovery(&log_mgr);
+        CheckpointManager cp_mgr(&bpm, &log_mgr);
+        RecoveryManager recovery(&log_mgr, nullptr, &bpm, &cp_mgr);
         
         // RUN ARIES
         // Expected Behavior: 

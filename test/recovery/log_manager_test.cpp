@@ -36,8 +36,8 @@ void TestRecovery() {
         // 1. Start Log Manager (Empty state)
         LogManager log_mgr(log_file);
         
-        // 2. Start Recovery Manager
-        RecoveryManager recovery(&log_mgr);
+        // 2. Start Recovery Manager (pass nullptr for catalog and checkpoint manager in this test)
+        RecoveryManager recovery(&log_mgr, nullptr, nullptr, nullptr);
         
         // 3. Run ARIES
         recovery.ARIES();

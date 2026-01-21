@@ -152,8 +152,9 @@ int main(int argc, char *argv[]) {
         auto bpm = std::make_unique<BufferPoolManager>(BUFFER_POOL_SIZE, disk_manager.get());
         auto catalog = std::make_unique<Catalog>(bpm.get());
         
-        auto log_manager = std::make_unique<LogManager>((system_dir / "franco.log").string());
-        std::cout << "[INFO] Log Manager initialized at: " << (system_dir / "franco.log").string() << std::endl;
+        // NEW: LogManager now takes base data directory, not specific log file
+        auto log_manager = std::make_unique<LogManager>(data_dir.string());
+        std::cout << "[INFO] Log Manager initialized with base directory: " << data_dir.string() << std::endl;
 
         if (catalog->GetAllTableNames().empty()) {
             try { catalog->LoadCatalog(); } catch (...) {

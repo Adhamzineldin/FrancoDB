@@ -121,7 +121,7 @@ namespace francodb {
                     }
                     res = ExecuteInsert(dynamic_cast<InsertStatement *>(stmt));
                     break;
-                case StatementType::SELECT: res = ExecuteSelect(dynamic_cast<SelectStatement *>(stmt));
+                case StatementType::SELECT: res = ExecuteSelect(dynamic_cast<SelectStatement *>(stmt), session);
                     break;
                 case StatementType::DELETE_CMD:
                     if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
@@ -295,7 +295,7 @@ namespace francodb {
         return ExecutionResult::Message("INSERT 1"); // Assuming simple insert
     }
 
-    ExecutionResult ExecutionEngine::ExecuteSelect(SelectStatement *stmt) {
+    ExecutionResult ExecutionEngine::ExecuteSelect(SelectStatement *stmt, SessionContext *session) {
         AbstractExecutor *executor = nullptr;
         bool use_index = false;
         
@@ -304,21 +304,22 @@ namespace francodb {
 
         // 1. DETERMINE DATA SOURCE (Live vs Time Travel)
         if (stmt->as_of_timestamp_ > 0) {
-            std::cout << "[TIME TRAVEL] Building snapshot as of " << stmt->as_of_timestamp_ << "..." << std::endl;
-            
+            // Get current database from session
+            std::string db_name = (session) ? session->current_db : "system";
+            std::cout << "[TIME TRAVEL] Building snapshot as of " << stmt->as_of_timestamp_ 
+                      << " for database '" << db_name << "'..." << std::endl;
             
             if (log_manager_) {
                 log_manager_->Flush(true);     
-                log_manager_->StopFlushThread(); 
             }
-            
             
             shadow_heap = SnapshotManager::BuildSnapshot(
                 stmt->table_name_, 
                 stmt->as_of_timestamp_, 
                 bpm_, 
                 log_manager_, 
-                catalog_
+                catalog_,
+                db_name  // Pass the correct database name
             );
             target_heap = shadow_heap.get();
             use_index = false; 
@@ -724,6 +725,11 @@ namespace francodb {
                 return ExecutionResult::Error("Failed to create database '" + stmt->db_name_ + "'");
             }
 
+            // CRITICAL: Create the WAL log directory for this database
+            if (log_manager_) {
+                log_manager_->CreateDatabaseLog(stmt->db_name_);
+            }
+
             // Grant creator ADMIN rights on this database
             UserRole creator_role = (session->role == UserRole::SUPERADMIN)
                                         ? UserRole::SUPERADMIN
@@ -773,6 +779,11 @@ namespace francodb {
             } else {
                 bpm_ = entry->bpm.get();
                 catalog_ = entry->catalog.get();
+            }
+
+            // CRITICAL: Switch the log manager to the new database's WAL file
+            if (log_manager_) {
+                log_manager_->SwitchDatabase(stmt->db_name_);
             }
 
             // Update executor context
@@ -1045,12 +1056,14 @@ namespace francodb {
         std::cout << "[SYSTEM] Initiating Time Travel to: " << stmt->timestamp_ << std::endl;
 
         try {
-            RecoveryManager recovery(log_manager_, catalog_, bpm_);
+            // Create checkpoint manager for recovery operations
+            CheckpointManager cp_mgr(bpm_, log_manager_);
+            RecoveryManager recovery(log_manager_, catalog_, bpm_, &cp_mgr);
+            
             // This now calls RollbackToTime internally
             recovery.RecoverToTime(stmt->timestamp_);
             
-            // Restart Logging
-            CheckpointManager cp_mgr(bpm_, log_manager_);
+            // Create a new checkpoint after recovery
             cp_mgr.BeginCheckpoint();
             
         } catch (const std::exception& e) {
