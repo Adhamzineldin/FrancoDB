@@ -118,6 +118,11 @@ void Worker(int thread_id) {
         int unique_id = (thread_id * 10000) + i;
         std::string val_v1 = "T" + std::to_string(thread_id) + "_VAL_" + std::to_string(i);
         std::string val_v2 = "UPDATED_" + std::to_string(i);
+        
+        
+        if (i % 50 == 0) {
+            std::cout << "." << std::flush; 
+        }
 
         // --- STEP 1: INSERT ---
         std::string q_ins = "EMLA GOWA verify_table ELKEYAM (" + std::to_string(unique_id) + ", '" + val_v1 + "');";

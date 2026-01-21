@@ -44,6 +44,20 @@ Source: "..\..\cmake-build-release\francodb_shell.exe"; DestDir: "{app}\bin"; De
 ; Service
 Source: "..\..\cmake-build-release\francodb_service.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
+; ==============================================================================
+; 3. MANAGEMENT SCRIPTS
+; ==============================================================================
+; Batch scripts for easy service control
+Source: "start_server.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "stop_server.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
+
+; VBScript versions (for advanced users)
+Source: "start_server.vbs"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "stop_server.vbs"; DestDir: "{app}\bin"; Flags: ignoreversion
+
+; PowerShell utility module
+Source: "FrancoDBUtils.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
+
 
 [UninstallDelete]
 ; Force delete the generated config file
@@ -61,6 +75,8 @@ Type: dirifempty; Name: "{app}"
 [Icons]
 Name: "{group}\FrancoDB Shell"; Filename: "{app}\bin\francodb.exe"; WorkingDir: "{app}\bin"
 Name: "{group}\FrancoDB Configuration"; Filename: "notepad.exe"; Parameters: """{app}\bin\francodb.conf"""
+Name: "{group}\Start FrancoDB"; Filename: "{app}\bin\start_server.bat"; WorkingDir: "{app}\bin"; IconFilename: "{app}\bin\francodb_server.exe"
+Name: "{group}\Stop FrancoDB"; Filename: "{app}\bin\stop_server.bat"; WorkingDir: "{app}\bin"; IconFilename: "{app}\bin\francodb_server.exe"
 Name: "{group}\Uninstall FrancoDB"; Filename: "{uninstallexe}"
 
 [Registry]
