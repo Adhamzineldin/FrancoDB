@@ -5,191 +5,362 @@
 
 namespace francodb {
     // Keywords map - accessible via GetKeywords() static method
+    // BOTH Franco (Arabic transliteration) AND English keywords are supported
     static const std::map<std::string, TokenType> kKeywords = {
-        // --- COMMANDS ---
-        {"2E5TAR", TokenType::SELECT},
-        {"MEN", TokenType::FROM},
-        {"LAMA", TokenType::WHERE},
-        {"2E3MEL", TokenType::CREATE},
-        {"DATABASE", TokenType::DATABASE},
-        {"DATABASES", TokenType::DATABASES},
-        {"GADWAL", TokenType::TABLE},
-        {"2ESTA5DEM", TokenType::USE},
-        {"USE", TokenType::USE},
-        {"LOGIN", TokenType::LOGIN},
+        // =====================================================================
+        // COMMANDS - DML (Data Manipulation Language)
+        // =====================================================================
+        // SELECT
+        {"SELECT",  TokenType::SELECT},     // English
+        {"2E5TAR",  TokenType::SELECT},     // Franco: "e5tar" = choose
         
-        // --- USER MGMT ---
-        {"MOSTA5DEM", TokenType::USER},
-        {"USER", TokenType::USER},
-        {"3ABD", TokenType::USER},
-        {"WAZEFA", TokenType::ROLE},
-        {"ROLE",   TokenType::ROLE},
-        {"DOWR",   TokenType::ROLE},
-        {"PASSWORD", TokenType::PASS},
-        {"WARENY", TokenType::SHOW},
-        {"SHOW",   TokenType::SHOW},
-        {"ANAMEEN", TokenType::WHOAMI},
-        {"WHOAMI",  TokenType::WHOAMI},
-        {"7ALAH",   TokenType::STATUS},
-        {"STATUS",  TokenType::STATUS},
-        {"WASF",    TokenType::DESCRIBE},
-        {"DESCRIBE", TokenType::DESCRIBE},
-        {"ALTER",   TokenType::ALTER},
-        {"ADAF",    TokenType::ADD},
-        {"ADD",     TokenType::ADD},
-        {"GHAYER_ESM", TokenType::RENAME},
-        {"RENAME",  TokenType::RENAME},
-        {"3AMOD",   TokenType::COLUMN},
-        {"COLUMN",  TokenType::COLUMN},
+        // FROM
+        {"FROM",    TokenType::FROM},       // English
+        {"MEN",     TokenType::FROM},       // Franco: "men" = from
+        
+        // WHERE
+        {"WHERE",   TokenType::WHERE},      // English
+        {"LAMA",    TokenType::WHERE},      // Franco: "lama" = when/where
+        
+        // INSERT
+        {"INSERT",  TokenType::INSERT},     // English
+        {"EMLA",    TokenType::INSERT},     // Franco: "emla" = fill
+        
+        // INTO
+        {"INTO",    TokenType::INTO},       // English
+        {"GOWA",    TokenType::INTO},       // Franco: "gowa" = inside
+        
+        // VALUES
+        {"VALUES",  TokenType::VALUES},     // English
+        {"ELKEYAM", TokenType::VALUES},     // Franco: "elkeyam" = the values
+        
+        // UPDATE
+        {"UPDATE",  TokenType::UPDATE_CMD}, // English
+        {"3ADEL",   TokenType::UPDATE_CMD}, // Franco: "3adel" = modify
+        
+        // SET
+        {"SET",     TokenType::SET},        // English
+        {"5ALY",    TokenType::UPDATE_SET}, // Franco: "5aly" = make it
+        
+        // DELETE
+        {"DELETE",  TokenType::DELETE_CMD}, // English
+        {"2EMSA7",  TokenType::DELETE_CMD}, // Franco: "emsa7" = erase
+        
+        // =====================================================================
+        // COMMANDS - DDL (Data Definition Language)
+        // =====================================================================
+        // CREATE
+        {"CREATE",  TokenType::CREATE},     // English
+        {"2E3MEL",  TokenType::CREATE},     // Franco: "e3mel" = make
+        
+        // DROP
+        {"DROP",    TokenType::DROP},       // English (also used for DELETE in context)
+        
+        // ALTER
+        {"ALTER",   TokenType::ALTER},      // English
+        
+        // TABLE
+        {"TABLE",   TokenType::TABLE},      // English
+        {"GADWAL",  TokenType::TABLE},      // Franco: "gadwal" = table
+        
+        // DATABASE
+        {"DATABASE",  TokenType::DATABASE},
+        {"DATABASES", TokenType::DATABASES},
+        
+        // INDEX
+        {"INDEX",   TokenType::INDEX},      // English
+        {"FEHRIS",  TokenType::INDEX},      // Franco: "fehris" = index
+        
+        // =====================================================================
+        // DATABASE MANAGEMENT
+        // =====================================================================
+        {"USE",       TokenType::USE},
+        {"2ESTA5DEM", TokenType::USE},      // Franco: "esta5dem" = use
+        
+        {"LOGIN",     TokenType::LOGIN},
+        
+        // =====================================================================
+        // USER MANAGEMENT
+        // =====================================================================
+        {"USER",      TokenType::USER},
+        {"MOSTA5DEM", TokenType::USER},     // Franco: "mosta5dem" = user
+        {"3ABD",      TokenType::USER},     // Franco: slang for user
+        
+        {"ROLE",      TokenType::ROLE},
+        {"WAZEFA",    TokenType::ROLE},     // Franco: "wazefa" = job/role
+        {"DOWR",      TokenType::ROLE},     // Franco: "dowr" = role
+        
+        {"PASSWORD",  TokenType::PASS},
+        {"PASS",      TokenType::PASS},
+        
+        // =====================================================================
+        // SYSTEM COMMANDS
+        // =====================================================================
+        {"SHOW",      TokenType::SHOW},
+        {"WARENY",    TokenType::SHOW},     // Franco: "wareny" = show me
+        
+        {"WHOAMI",    TokenType::WHOAMI},
+        {"ANAMEEN",   TokenType::WHOAMI},   // Franco: "ana meen" = who am I
+        
+        {"STATUS",    TokenType::STATUS},
+        {"7ALAH",     TokenType::STATUS},   // Franco: "7alah" = status
+        
+        {"DESCRIBE",  TokenType::DESCRIBE},
+        {"DESC",      TokenType::DESCRIBE}, // Alias (when standalone)
+        {"WASF",      TokenType::DESCRIBE}, // Franco: "wasf" = describe
+        
+        // =====================================================================
+        // COLUMN OPERATIONS
+        // =====================================================================
+        {"ADD",       TokenType::ADD},
+        {"ADAF",      TokenType::ADD},      // Franco: "adaf" = add
+        
+        {"RENAME",    TokenType::RENAME},
+        {"GHAYER_ESM", TokenType::RENAME},  // Franco: "ghayer esm" = change name
+        
+        {"COLUMN",    TokenType::COLUMN},
+        {"3AMOD",     TokenType::COLUMN},   // Franco: "3amod" = column
 
-        // --- DATA MODIFICATION ---
-        {"2EMSA7",  TokenType::DELETE_CMD}, 
-        {"5ALY",    TokenType::UPDATE_SET},
-        {"3ADEL",   TokenType::UPDATE_CMD},
-        {"EMLA",    TokenType::INSERT},
-        {"GOWA",    TokenType::INTO},
-        {"ELKEYAM", TokenType::VALUES},
-
-        // --- ROLES (NEW) ---
+        // =====================================================================
+        // USER ROLES
+        // =====================================================================
         {"SUPERADMIN", TokenType::ROLE_SUPERADMIN},
         {"ADMIN",      TokenType::ROLE_ADMIN},
-        {"MODEER",     TokenType::ROLE_ADMIN},
+        {"MODEER",     TokenType::ROLE_ADMIN},    // Franco: "modeer" = manager
         {"NORMAL",     TokenType::ROLE_NORMAL},
-        {"3ADI",       TokenType::ROLE_NORMAL},
+        {"3ADI",       TokenType::ROLE_NORMAL},   // Franco: "3adi" = normal
         {"READONLY",   TokenType::ROLE_READONLY},
-        {"MOSHAHED",   TokenType::ROLE_READONLY},
+        {"MOSHAHED",   TokenType::ROLE_READONLY}, // Franco: "moshahed" = viewer
         {"DENIED",     TokenType::ROLE_DENIED},
-        {"MAMNO3",     TokenType::ROLE_DENIED},
+        {"MAMNO3",     TokenType::ROLE_DENIED},   // Franco: "mamno3" = forbidden
 
-        // --- TYPES ---
-        {"RAKAM", TokenType::INT_TYPE},
-        {"GOMLA", TokenType::STRING_TYPE},
-        {"BOOL",  TokenType::BOOL_TYPE},
-        {"TARE5", TokenType::DATE_TYPE},
-        {"KASR",  TokenType::DECIMAL_TYPE},
+        // =====================================================================
+        // DATA TYPES
+        // =====================================================================
+        {"INT",       TokenType::INT_TYPE},
+        {"INTEGER",   TokenType::INT_TYPE},
+        {"RAKAM",     TokenType::INT_TYPE},     // Franco: "rakam" = number
         
-        // --- VALUES ---
-        {"AH",    TokenType::TRUE_LIT},
-        {"LA",    TokenType::FALSE_LIT},
+        {"VARCHAR",   TokenType::STRING_TYPE},
+        {"TEXT",      TokenType::STRING_TYPE},
+        {"STRING",    TokenType::STRING_TYPE},
+        {"GOMLA",     TokenType::STRING_TYPE},  // Franco: "gomla" = sentence
+        
+        {"BOOL",      TokenType::BOOL_TYPE},
+        {"BOOLEAN",   TokenType::BOOL_TYPE},
+        
+        {"DATE",      TokenType::DATE_TYPE},
+        {"DATETIME",  TokenType::DATE_TYPE},
+        {"TARE5",     TokenType::DATE_TYPE},    // Franco: "tare5" = date
+        
+        {"DECIMAL",   TokenType::DECIMAL_TYPE},
+        {"FLOAT",     TokenType::DECIMAL_TYPE},
+        {"DOUBLE",    TokenType::DECIMAL_TYPE},
+        {"KASR",      TokenType::DECIMAL_TYPE}, // Franco: "kasr" = fraction
+        
+        // =====================================================================
+        // BOOLEAN LITERALS
+        // =====================================================================
+        {"TRUE",      TokenType::TRUE_LIT},
+        {"AH",        TokenType::TRUE_LIT},     // Franco: "ah" = yes
+        
+        {"FALSE",     TokenType::FALSE_LIT},
+        {"LA",        TokenType::FALSE_LIT},    // Franco: "la" = no
 
-        // --- LOGIC / OPS ---
-        {"WE",    TokenType::AND},
-        {"AW",    TokenType::OR},
-        {"FE",    TokenType::IN_OP},
-        {"3ALA",  TokenType::ON},
+        // =====================================================================
+        // LOGICAL OPERATORS
+        // =====================================================================
+        {"AND",       TokenType::AND},
+        {"WE",        TokenType::AND},          // Franco: "we" = and
         
-        // --- INDEX / PK ---
-        {"FEHRIS", TokenType::INDEX},
-        {"ASASI",  TokenType::PRIMARY_KEY},
-        {"MOFTA7", TokenType::KEY},
+        {"OR",        TokenType::OR},
+        {"AW",        TokenType::OR},           // Franco: "aw" = or
+        
+        {"IN",        TokenType::IN_OP},
+        {"FE",        TokenType::IN_OP},        // Franco: "fe" = in
+        
+        {"ON",        TokenType::ON},
+        {"3ALA",      TokenType::ON},           // Franco: "3ala" = on
+        
+        // =====================================================================
+        // PRIMARY KEY / INDEX
+        // =====================================================================
+        {"PRIMARY",   TokenType::PRIMARY_KEY},
+        {"ASASI",     TokenType::PRIMARY_KEY},  // Franco: "asasi" = primary
+        
+        {"KEY",       TokenType::KEY},
+        {"MOFTA7",    TokenType::KEY},          // Franco: "mofta7" = key
 
-        // --- TRANSACTIONS ---
-        {"2EBDA2", TokenType::BEGIN_TXN},
-        {"2ERGA3", TokenType::ROLLBACK},
-        {"2AKED",  TokenType::COMMIT},
+        // =====================================================================
+        // TRANSACTIONS
+        // =====================================================================
+        {"BEGIN",     TokenType::BEGIN_TXN},
+        {"START",     TokenType::BEGIN_TXN},
+        {"2EBDA2",    TokenType::BEGIN_TXN},    // Franco: "ebda2" = start
         
+        {"COMMIT",    TokenType::COMMIT},
+        {"2AKED",     TokenType::COMMIT},       // Franco: "2aked" = confirm
         
+        {"ROLLBACK",  TokenType::ROLLBACK},
+        {"2ERGA3",    TokenType::ROLLBACK},     // Franco: "erga3" = go back
+        {"UNDO",      TokenType::ROLLBACK},     // Alias
         
-        // --- RECOVERY / TIME TRAVEL (NEW) ---
+        // =====================================================================
+        // RECOVERY / TIME TRAVEL
+        // =====================================================================
         {"CHECKPOINT", TokenType::CHECKPOINT},
-        {"SAVE",       TokenType::CHECKPOINT}, // Alias
+        {"SAVE",       TokenType::CHECKPOINT},  // Alias
+        
         {"RECOVER",    TokenType::RECOVER},
-        {"ERGA3",      TokenType::RECOVER},    // "Return" / "Go Back"
+        {"ERGA3",      TokenType::RECOVER},     // Franco: "erga3" = return
+        
         {"TO",         TokenType::TO},
-        {"ELA",        TokenType::TO},
-        {"LATEST",     TokenType::LATEST},     // Recover to latest state
-        {"A5ER",       TokenType::LATEST},     // Arabic: "latest"
-        {"ASLHA",      TokenType::LATEST},     // Arabic: "original"
-        {"NOW",        TokenType::NOW},        // Current time
-        {"DELWA2TY",   TokenType::NOW},        // Arabic: "now"
-        {"CURRENT",    TokenType::CURRENT},    // Current state
-        {"7ALY",       TokenType::CURRENT},    // Arabic: "current"
-        {"AS",         TokenType::AS},         // For AS OF queries
-        {"K",          TokenType::AS},         // Arabic: "as"
-        {"OF",         TokenType::OF},         // For AS OF queries
+        {"ELA",        TokenType::TO},          // Franco: "ela" = to
         
-        // --- GROUP BY & AGGREGATES ---
-        {"MAGMO3A", TokenType::GROUP},
-        {"GROUP",   TokenType::GROUP},
-        {"B",       TokenType::BY},
-        {"BY",      TokenType::BY},
-        {"ETHA",    TokenType::HAVING},
-        {"LAKEN",   TokenType::HAVING},
-        {"HAVING",  TokenType::HAVING},
-        {"3ADD",    TokenType::COUNT},
-        {"COUNT",   TokenType::COUNT},
-        {"MAG3MO3", TokenType::SUM},
-        {"SUM",     TokenType::SUM},
-        {"MOTOWASET", TokenType::AVG},
-        {"AVG",     TokenType::AVG},
-        {"ASGAR",   TokenType::MIN_AGG},
-        {"MIN",     TokenType::MIN_AGG},
-        {"AKBAR",   TokenType::MAX_AGG},
-        {"MAX",     TokenType::MAX_AGG},
+        {"LATEST",     TokenType::LATEST},
+        {"A5ER",       TokenType::LATEST},      // Franco: "a5er" = latest
+        {"ASLHA",      TokenType::LATEST},      // Franco: "aslha" = original
         
-        // --- ORDER BY ---
-        {"RATEB",    TokenType::ORDER},
-        {"ORDER",    TokenType::ORDER},
-        {"TASE3DI",  TokenType::ASC},
-        {"TALE3",    TokenType::ASC},
-        {"ASC",      TokenType::ASC},
-        {"TANAZOLI", TokenType::DESC},
-        {"NAZL",     TokenType::DESC},
-        {"DESC",     TokenType::DESC},
+        {"NOW",        TokenType::NOW},
+        {"DELWA2TY",   TokenType::NOW},         // Franco: "delwa2ty" = now
         
-        // --- LIMIT / OFFSET ---
-        {"7ADD",      TokenType::LIMIT},
+        {"CURRENT",    TokenType::CURRENT},
+        {"7ALY",       TokenType::CURRENT},     // Franco: "7aly" = current
+        
+        {"AS",         TokenType::AS},
+        {"K",          TokenType::AS},          // Franco: "k" = as
+        
+        {"OF",         TokenType::OF},
+        
+        // =====================================================================
+        // GROUP BY & AGGREGATES
+        // =====================================================================
+        {"GROUP",     TokenType::GROUP},
+        {"MAGMO3A",   TokenType::GROUP},        // Franco: "magmo3a" = group
+        
+        {"BY",        TokenType::BY},
+        {"B",         TokenType::BY},           // Franco shorthand
+        
+        {"HAVING",    TokenType::HAVING},
+        {"ETHA",      TokenType::HAVING},       // Franco: "etha" = if
+        {"LAKEN",     TokenType::HAVING},       // Franco: "laken" = but
+        
+        {"COUNT",     TokenType::COUNT},
+        {"3ADD",      TokenType::COUNT},        // Franco: "3add" = count
+        
+        {"SUM",       TokenType::SUM},
+        {"MAG3MO3",   TokenType::SUM},          // Franco: "mag3mo3" = sum
+        
+        {"AVG",       TokenType::AVG},
+        {"AVERAGE",   TokenType::AVG},
+        {"MOTOWASET", TokenType::AVG},          // Franco: "motowaset" = average
+        
+        {"MIN",       TokenType::MIN_AGG},
+        {"ASGAR",     TokenType::MIN_AGG},      // Franco: "asgar" = smallest
+        
+        {"MAX",       TokenType::MAX_AGG},
+        {"AKBAR",     TokenType::MAX_AGG},      // Franco: "akbar" = biggest
+        
+        // =====================================================================
+        // ORDER BY
+        // =====================================================================
+        {"ORDER",     TokenType::ORDER},
+        {"RATEB",     TokenType::ORDER},        // Franco: "rateb" = arrange
+        
+        {"ASC",       TokenType::ASC},
+        {"ASCENDING", TokenType::ASC},
+        {"TASE3DI",   TokenType::ASC},          // Franco: "tase3di" = ascending
+        {"TALE3",     TokenType::ASC},          // Franco: "tale3" = going up
+        
+        {"DESC",      TokenType::DESC},         // Note: Also DESCRIBE when standalone
+        {"DESCENDING", TokenType::DESC},
+        {"TANAZOLI",  TokenType::DESC},         // Franco: "tanazoli" = descending
+        {"NAZL",      TokenType::DESC},         // Franco: "nazl" = going down
+        
+        // =====================================================================
+        // LIMIT / OFFSET
+        // =====================================================================
         {"LIMIT",     TokenType::LIMIT},
-        {"EBDA2MEN",  TokenType::OFFSET},
+        {"7ADD",      TokenType::LIMIT},        // Franco: "7add" = limit
+        
         {"OFFSET",    TokenType::OFFSET},
+        {"SKIP",      TokenType::OFFSET},       // Alias
+        {"EBDA2MEN",  TokenType::OFFSET},       // Franco: "ebda2 men" = start from
         
-        // --- DISTINCT ---
-        {"MOTA3MEZ", TokenType::DISTINCT},
-        {"DISTINCT", TokenType::DISTINCT},
-        {"KOL",      TokenType::ALL},
-        {"ALL",      TokenType::ALL},
+        // =====================================================================
+        // DISTINCT / ALL
+        // =====================================================================
+        {"DISTINCT",  TokenType::DISTINCT},
+        {"UNIQUE",    TokenType::DISTINCT},     // Sometimes used as alias
+        {"MOTA3MEZ",  TokenType::DISTINCT},     // Franco: "mota3mez" = distinct
         
-        // --- JOINS ---
-        {"ENTEDAH",  TokenType::JOIN},
-        {"JOIN",     TokenType::JOIN},
-        {"DA5ELY",   TokenType::INNER},
-        {"INNER",    TokenType::INNER},
-        {"SHMAL",    TokenType::LEFT},
-        {"LEFT",     TokenType::LEFT},
-        {"YAMEN",    TokenType::RIGHT},
-        {"RIGHT",    TokenType::RIGHT},
-        {"5AREGY",   TokenType::OUTER},
-        {"OUTER",    TokenType::OUTER},
-        {"TAQATE3",  TokenType::CROSS},
-        {"CROSS",    TokenType::CROSS},
+        {"ALL",       TokenType::ALL},
+        {"KOL",       TokenType::ALL},          // Franco: "kol" = all
         
-        // --- FOREIGN KEYS ---
+        // =====================================================================
+        // JOINS
+        // =====================================================================
+        {"JOIN",      TokenType::JOIN},
+        {"ENTEDAH",   TokenType::JOIN},         // Franco: "entedah" = join
+        
+        {"INNER",     TokenType::INNER},
+        {"DA5ELY",    TokenType::INNER},        // Franco: "da5ely" = inner
+        
+        {"LEFT",      TokenType::LEFT},
+        {"SHMAL",     TokenType::LEFT},         // Franco: "shmal" = left
+        
+        {"RIGHT",     TokenType::RIGHT},
+        {"YAMEN",     TokenType::RIGHT},        // Franco: "yamen" = right
+        
+        {"OUTER",     TokenType::OUTER},
+        {"5AREGY",    TokenType::OUTER},        // Franco: "5aregy" = outer
+        
+        {"CROSS",     TokenType::CROSS},
+        {"TAQATE3",   TokenType::CROSS},        // Franco: "taqate3" = intersect
+        
+        {"FULL",      TokenType::OUTER},        // FULL OUTER JOIN
+        
+        // =====================================================================
+        // FOREIGN KEYS
+        // =====================================================================
         {"FOREIGN",    TokenType::FOREIGN},
-        {"KEY",        TokenType::KEY},
-        {"YOSHEER",    TokenType::REFERENCES},
-        {"REFERENCES", TokenType::REFERENCES},
-        {"TATABE3",    TokenType::CASCADE},
-        {"CASCADE",    TokenType::CASCADE},
-        {"MANE3",      TokenType::RESTRICT},
-        {"RESTRICT",   TokenType::RESTRICT},
-        {"SET",        TokenType::SET},
-        {"NO",         TokenType::NO},
-        {"E3RA2",      TokenType::ACTION},
-        {"ACTION",     TokenType::ACTION},
         
-        // --- CONSTRAINTS ---
-        {"FADY",         TokenType::NULL_LIT},
-        {"NULL",         TokenType::NULL_LIT},
-        {"MESH",         TokenType::NOT},
-        {"NOT",          TokenType::NOT},
-        {"EFRADY",       TokenType::DEFAULT_KW},
-        {"DEFAULT",      TokenType::DEFAULT_KW},
-        {"WAHED",        TokenType::UNIQUE},
-        {"UNIQUE",       TokenType::UNIQUE},
-        {"FA7S",         TokenType::CHECK},
-        {"CHECK",        TokenType::CHECK},
-        {"TAZAYED",      TokenType::AUTO_INCREMENT},
-        {"AUTO_INCREMENT", TokenType::AUTO_INCREMENT}
+        {"REFERENCES", TokenType::REFERENCES},
+        {"YOSHEER",    TokenType::REFERENCES},  // Franco: "yosheer" = points to
+        
+        {"CASCADE",    TokenType::CASCADE},
+        {"TATABE3",    TokenType::CASCADE},     // Franco: "tatabe3" = follow
+        
+        {"RESTRICT",   TokenType::RESTRICT},
+        {"MANE3",      TokenType::RESTRICT},    // Franco: "mane3" = prevent
+        
+        {"NO",         TokenType::NO},
+        
+        {"ACTION",     TokenType::ACTION},
+        {"E3RA2",      TokenType::ACTION},      // Franco: "e3ra2" = action
+        
+        // =====================================================================
+        // CONSTRAINTS
+        // =====================================================================
+        {"NULL",       TokenType::NULL_LIT},
+        {"FADY",       TokenType::NULL_LIT},    // Franco: "fady" = empty
+        
+        {"NOT",        TokenType::NOT},
+        {"MESH",       TokenType::NOT},         // Franco: "mesh" = not
+        
+        {"DEFAULT",    TokenType::DEFAULT_KW},
+        {"EFRADY",     TokenType::DEFAULT_KW},  // Franco: "efrady" = default
+        
+        {"UNIQUE",     TokenType::UNIQUE},
+        {"WAHED",      TokenType::UNIQUE},      // Franco: "wahed" = one/unique
+        
+        {"CHECK",      TokenType::CHECK},
+        {"FA7S",       TokenType::CHECK},       // Franco: "fa7s" = check
+        
+        {"AUTO_INCREMENT", TokenType::AUTO_INCREMENT},
+        {"AUTOINCREMENT",  TokenType::AUTO_INCREMENT},
+        {"SERIAL",         TokenType::AUTO_INCREMENT},  // PostgreSQL style
+        {"TAZAYED",        TokenType::AUTO_INCREMENT}   // Franco: "tazayed" = increment
     };
 
     Token Lexer::NextToken() {
