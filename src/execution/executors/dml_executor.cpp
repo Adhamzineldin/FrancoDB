@@ -26,6 +26,7 @@
 #include "execution/executors/update_executor.h"
 #include "execution/executors/index_scan_executor.h"
 #include "execution/executors/join_executor.h"
+#include "recovery/snapshot_manager.h"
 #include "parser/statement.h"
 #include "catalog/catalog.h"
 #include "catalog/table_metadata.h"
@@ -85,7 +86,7 @@ ExecutionResult DMLExecutor::Insert(InsertStatement* stmt, Transaction* txn) {
 }
 
 // ============================================================================
-// SELECT - With Query Optimization
+// SELECT - With Query Optimization and Time Travel
 // ============================================================================
 
 ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* session, Transaction* txn) {
@@ -108,8 +109,43 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
         AbstractExecutor* executor = nullptr;
         bool use_index = false;
         
-        // Get the target table heap
+        // Get the target table heap (will be overridden for time travel)
         TableHeap* target_heap = table_info->table_heap_.get();
+        std::unique_ptr<TableHeap> snapshot_heap = nullptr;  // For time travel cleanup
+        
+        // =================================================================
+        // TIME TRAVEL (AS OF) - Build Snapshot
+        // =================================================================
+        if (stmt->as_of_timestamp_ > 0) {
+            std::cout << "[TIME TRAVEL] Building snapshot as of " << stmt->as_of_timestamp_ 
+                      << " for database '" << (session ? session->current_db : "unknown") << "'..." << std::endl;
+            
+            // **CRITICAL**: Flush the log to ensure all records are on disk
+            if (log_manager_) {
+                log_manager_->Flush(true);  // Force flush
+            }
+            
+            // Build the snapshot
+            std::string db_name = (session && !session->current_db.empty()) 
+                                  ? session->current_db : "system";
+            
+            snapshot_heap = SnapshotManager::BuildSnapshot(
+                stmt->table_name_,
+                stmt->as_of_timestamp_,
+                bpm_,
+                log_manager_,
+                catalog_,
+                db_name
+            );
+            
+            if (snapshot_heap) {
+                target_heap = snapshot_heap.get();
+                std::cout << "[TIME TRAVEL] Snapshot built successfully, target_heap=" 
+                          << (void*)target_heap << std::endl;
+            } else {
+                return ExecutionResult::Error("[DML] Failed to build snapshot for time travel");
+            }
+        }
         
         // =================================================================
         // QUERY OPTIMIZER - Choose best execution path

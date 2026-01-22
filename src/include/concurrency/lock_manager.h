@@ -75,13 +75,13 @@ struct LockRequestQueue {
  */
 class LockManager {
 public:
-    LockManager() : enable_deadlock_detection_(true) {
-        // Start deadlock detection thread
-        deadlock_detection_thread_ = std::thread(&LockManager::DeadlockDetectionLoop, this);
+    LockManager() : enable_deadlock_detection_(false) {
+        // Deadlock detection disabled by default for performance
+        // Can be enabled with EnableDeadlockDetection() if needed
     }
     
     ~LockManager() {
-        // Stop deadlock detection thread
+        // Stop deadlock detection thread if running
         enable_deadlock_detection_ = false;
         if (deadlock_detection_thread_.joinable()) {
             deadlock_detection_thread_.join();

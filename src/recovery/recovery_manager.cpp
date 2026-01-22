@@ -938,13 +938,81 @@ namespace francodb {
                 }
                 
                 case LogRecordType::UPDATE: {
+                    // Parse the old and new values (pipe-separated for multi-column tables)
+                    std::string old_str = record.old_value_.ToString();
+                    std::string new_str = record.new_value_.ToString();
+                    
+                    // Parse old values
+                    std::vector<Value> old_vals;
+                    {
+                        std::stringstream ss(old_str);
+                        std::string item;
+                        uint32_t col_idx = 0;
+                        while (std::getline(ss, item, '|') && col_idx < table_info->schema_.GetColumnCount()) {
+                            const Column& col = table_info->schema_.GetColumn(col_idx);
+                            TypeId type = col.GetType();
+                            if (type == TypeId::INTEGER) {
+                                try { old_vals.push_back(Value(type, std::stoi(item))); }
+                                catch (...) { old_vals.push_back(Value(type, 0)); }
+                            } else if (type == TypeId::DECIMAL) {
+                                try { old_vals.push_back(Value(type, std::stod(item))); }
+                                catch (...) { old_vals.push_back(Value(type, 0.0)); }
+                            } else {
+                                old_vals.push_back(Value(type, item));
+                            }
+                            col_idx++;
+                        }
+                    }
+                    
+                    // Parse new values
+                    std::vector<Value> new_vals;
+                    {
+                        std::stringstream ss(new_str);
+                        std::string item;
+                        uint32_t col_idx = 0;
+                        while (std::getline(ss, item, '|') && col_idx < table_info->schema_.GetColumnCount()) {
+                            const Column& col = table_info->schema_.GetColumn(col_idx);
+                            TypeId type = col.GetType();
+                            if (type == TypeId::INTEGER) {
+                                try { new_vals.push_back(Value(type, std::stoi(item))); }
+                                catch (...) { new_vals.push_back(Value(type, 0)); }
+                            } else if (type == TypeId::DECIMAL) {
+                                try { new_vals.push_back(Value(type, std::stod(item))); }
+                                catch (...) { new_vals.push_back(Value(type, 0.0)); }
+                            } else {
+                                new_vals.push_back(Value(type, item));
+                            }
+                            col_idx++;
+                        }
+                    }
+                    
+                    // Find and update the matching tuple
                     auto iter = target_heap->Begin(nullptr);
                     while (iter != target_heap->End()) {
-                        if ((*iter).GetValue(table_info->schema_, 0).ToString() == 
-                            record.old_value_.ToString()) {
-                            std::vector<Value> vals = {record.new_value_};
-                            Tuple t(vals, table_info->schema_);
-                            target_heap->UpdateTuple(t, iter.GetRID(), nullptr);
+                        // Check if all values match
+                        bool match = true;
+                        if (old_vals.size() == table_info->schema_.GetColumnCount()) {
+                            for (uint32_t i = 0; i < old_vals.size() && match; i++) {
+                                if ((*iter).GetValue(table_info->schema_, i).ToString() != 
+                                    old_vals[i].ToString()) {
+                                    match = false;
+                                }
+                            }
+                        } else {
+                            // Fallback to first column comparison
+                            match = (*iter).GetValue(table_info->schema_, 0).ToString() == old_str;
+                        }
+                        
+                        if (match) {
+                            // Delete old and insert new (UPDATE = DELETE + INSERT)
+                            target_heap->MarkDelete(iter.GetRID(), nullptr);
+                            if (new_vals.size() == table_info->schema_.GetColumnCount()) {
+                                Tuple new_tuple(new_vals, table_info->schema_);
+                                RID new_rid;
+                                target_heap->InsertTuple(new_tuple, &new_rid, nullptr);
+                                std::cout << "[SNAPSHOT] Applied UPDATE for table '" << record.table_name_ 
+                                          << "': " << old_str << " -> " << new_str << std::endl;
+                            }
                             break;
                         }
                         ++iter;
