@@ -1,5 +1,6 @@
 #include "execution/executors/update_executor.h"
 #include "execution/predicate_evaluator.h"
+#include "concurrency/lock_manager.h"
 #include "common/exception.h"
 #include "catalog/index_info.h"
 #include "storage/index/index_key.h"
@@ -70,7 +71,10 @@ bool UpdateExecutor::Next(Tuple *tuple) {
     };
     std::vector<UpdateInfo> updates_to_apply;
     
-    // 1. SCAN PHASE
+    // Get lock manager for row-level locking (CONCURRENCY FIX)
+    LockManager* lock_mgr = exec_ctx_->GetLockManager();
+    
+    // 1. SCAN PHASE - Acquire exclusive locks on matching rows
     page_id_t curr_page_id = table_info_->first_page_id_;
     auto bpm = exec_ctx_->GetBufferPoolManager();
 
@@ -89,9 +93,33 @@ bool UpdateExecutor::Next(Tuple *tuple) {
             
             if (table_page->GetTuple(rid, &old_tuple, txn_)) {
                 if (EvaluatePredicate(old_tuple)) {
+                    // CONCURRENCY FIX: Acquire exclusive lock on this row
+                    if (lock_mgr && txn_) {
+                        txn_id_t txn_id = txn_->GetTransactionId();
+                        if (!lock_mgr->LockRow(txn_id, rid, LockMode::EXCLUSIVE)) {
+                            // Lock acquisition failed (deadlock, timeout)
+                            bpm->UnpinPage(curr_page_id, false);
+                            throw Exception(ExceptionType::EXECUTION, 
+                                "Could not acquire lock on row - transaction aborted");
+                        }
+                    }
+                    
+                    // Re-read tuple after acquiring lock (another txn might have modified it)
+                    Tuple locked_tuple;
+                    if (!table_page->GetTuple(rid, &locked_tuple, txn_)) {
+                        // Tuple was deleted while we waited for the lock, skip it
+                        continue;
+                    }
+                    
+                    // Re-check predicate after acquiring lock
+                    if (!EvaluatePredicate(locked_tuple)) {
+                        // Tuple was modified and no longer matches, skip it
+                        continue;
+                    }
+                    
                     // FOUND MATCH! Prepare the NEW tuple.
-                    Tuple new_tuple = CreateUpdatedTuple(old_tuple);
-                    updates_to_apply.push_back({rid, old_tuple, new_tuple});
+                    Tuple new_tuple = CreateUpdatedTuple(locked_tuple);
+                    updates_to_apply.push_back({rid, locked_tuple, new_tuple});
                 }
             }
         }
@@ -107,24 +135,12 @@ bool UpdateExecutor::Next(Tuple *tuple) {
     }
 
     // 2. APPLY PHASE (Update indexes, Delete Old, Insert New)
+    // NOTE: We already hold exclusive locks on all rows in updates_to_apply
     int count = 0;
     for (const auto &update : updates_to_apply) {
-        // Verify the tuple still exists (might have been deleted by another thread)
-        Tuple verify_tuple;
-        if (!table_info_->table_heap_->GetTuple(update.old_rid, &verify_tuple, txn_)) {
-            // Tuple was already deleted by another thread, skip this update
-            continue;
-        }
-        
-        // Verify it still matches the predicate (tuple might have been updated)
-        if (!EvaluatePredicate(verify_tuple)) {
-            // Tuple no longer matches predicate, skip this update
-            continue;
-        }
-        
         // Track modification for rollback (old RID with old tuple)
         if (txn_) {
-            txn_->AddModifiedTuple(update.old_rid, verify_tuple, false, plan_->table_name_); // false = not deleted, just updated
+            txn_->AddModifiedTuple(update.old_rid, update.old_tuple, false, plan_->table_name_);
         }
         
         // --- CHECK PRIMARY KEY UNIQUENESS (if updating a PK column) ---
