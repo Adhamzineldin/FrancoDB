@@ -9,9 +9,7 @@
 
 namespace francodb {
 
-    // LSN type for WAL tracking
-    using lsn_t = int32_t;
-    static constexpr lsn_t INVALID_LSN = -1;
+    // lsn_t and INVALID_LSN are now defined in common/config.h
 
     /**
      * Page Class

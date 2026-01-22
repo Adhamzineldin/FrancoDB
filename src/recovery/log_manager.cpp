@@ -1,4 +1,5 @@
 #include "recovery/log_manager.h"
+#include "common/crc32.h"
 #include <cstring>
 #include <iostream>
 #include <chrono>
@@ -222,14 +223,20 @@ namespace francodb {
             }
 
             // 5. Patch the Size in Header
-            int32_t final_size = static_cast<int32_t>(record_buf.size());
+            int32_t final_size = static_cast<int32_t>(record_buf.size() + sizeof(uint32_t));  // +4 for CRC
             std::memcpy(record_buf.data(), &final_size, sizeof(int32_t));
             log_record.size_ = final_size;
 
-            // 6. Append to Log Buffer
+            // 6. Compute and append CRC32 checksum for integrity
+            // This protects against partial writes during crash
+            uint32_t crc = CRC32::Compute(record_buf.data(), record_buf.size());
+            const char* crc_ptr = reinterpret_cast<const char*>(&crc);
+            record_buf.insert(record_buf.end(), crc_ptr, crc_ptr + sizeof(uint32_t));
+
+            // 7. Append to Log Buffer
             log_buffer_.insert(log_buffer_.end(), record_buf.begin(), record_buf.end());
 
-            // 7. Update file offset tracking
+            // 8. Update file offset tracking
             current_file_offset_ += final_size;
 
             return log_record.lsn_;

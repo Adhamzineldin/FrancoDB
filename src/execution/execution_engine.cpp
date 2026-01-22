@@ -8,6 +8,12 @@
 #include "recovery/checkpoint_manager.h"
 #include "recovery/recovery_manager.h"
 #include "common/exception.h"
+
+// NEW: Factory pattern components for eliminating switch statement
+#include "execution/executor_factory.h"
+#include "execution/ddl_executor.h"
+#include "execution/dml_executor.h"
+
 #include <algorithm>
 #include <sstream>
 #include <filesystem>

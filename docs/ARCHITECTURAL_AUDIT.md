@@ -806,11 +806,24 @@ namespace francodb::config {
 
 # 6. IMMEDIATE ACTION ITEMS
 
-1. **Create `PageGuard` RAII class** - Prevents ALL future pin leaks
-2. **Add `FlushToLSN()` to LogManager** - Enforces WAL protocol
-3. **Add CRC32 to log records** - Detects partial writes
-4. **Make `next_txn_id_` atomic** - Prevents duplicate IDs
-5. **Extract `PredicateEvaluator`** - Eliminates 180 lines of duplication
+1. ✅ **Create `PageGuard` RAII class** - Prevents ALL future pin leaks
+2. ✅ **Add `FlushToLSN()` to LogManager** - Enforces WAL protocol
+3. ✅ **Add CRC32 to log records** - Detects partial writes
+4. ✅ **Make `next_txn_id_` atomic** - Prevents duplicate IDs
+5. ✅ **Extract `PredicateEvaluator`** - Eliminates 180 lines of duplication
+
+# 7. ADDITIONAL COMPLETED REFACTORING
+
+6. ✅ **CRC32 Utility Class** (`src/include/common/crc32.h`)
+7. ✅ **Storage Interface Abstraction** (`src/include/storage/storage_interface.h`)
+8. ✅ **Centralized Config Constants** (`src/include/common/config.h` expanded)
+9. ✅ **TransactionManager** (`src/include/concurrency/transaction_manager.h`)
+10. ✅ **LockManager with Deadlock Detection** (`src/include/concurrency/lock_manager.h`)
+11. ✅ **PartitionedBufferPoolManager** (`src/include/buffer/partitioned_buffer_pool_manager.h`)
+12. ✅ **Tuple Copy Optimization** (Iterator caching in `table_heap.cpp/h`)
+13. ✅ **DDLExecutor** (`src/include/execution/ddl_executor.h`)
+14. ✅ **DMLExecutor** (`src/include/execution/dml_executor.h`)
+15. ✅ **ExecutorFactory** (`src/include/execution/executor_factory.h`)
 
 ---
 

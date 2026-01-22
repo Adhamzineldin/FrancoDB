@@ -30,17 +30,19 @@ namespace francodb {
         // This abstracts away page fetching, pinning, and slot logic
         while (iter_ != active_heap_->End()) {
             
-            // Dereference iterator to get the current Tuple
-            Tuple candidate_tuple = *iter_;
+            // Get reference to cached tuple (avoids copy)
+            const Tuple& candidate_tuple = iter_.GetCurrentTuple();
+            
+            // Apply WHERE clause
+            if (EvaluatePredicate(candidate_tuple)) {
+                // Use move semantics when extracting the tuple
+                *tuple = iter_.ExtractTuple();
+                ++iter_;
+                return true;
+            }
             
             // Move iterator forward (handles jumping across pages)
             ++iter_;
-
-            // Apply WHERE clause
-            if (EvaluatePredicate(candidate_tuple)) {
-                *tuple = candidate_tuple;
-                return true;
-            }
         }
         
         return false; // End of Scan

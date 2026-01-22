@@ -44,19 +44,46 @@ namespace francodb {
             Iterator(BufferPoolManager *bpm, page_id_t page_id, uint32_t slot_id, 
                      Transaction *txn, bool is_end = false);
             
+            /**
+             * Dereference operator - returns copy of current tuple
+             * Consider using GetCurrentTuple() for reference access
+             */
             Tuple operator*();
+            
+            /**
+             * Get reference to current tuple (avoids copy)
+             * Valid until Next() is called
+             */
+            const Tuple& GetCurrentTuple() const { return cached_tuple_; }
+            
+            /**
+             * Extract tuple with move semantics (most efficient)
+             * Iterator must be advanced after calling this
+             */
+            Tuple ExtractTuple() { return std::move(cached_tuple_); }
+            
             Iterator& operator++();
             bool operator!=(const Iterator &other) const;
             RID GetRID() const { return RID(current_page_id_, current_slot_); }
+            
+            /**
+             * Check if iterator has a valid cached tuple
+             */
+            bool HasCachedTuple() const { return has_cached_tuple_; }
 
         private:
             void AdvanceToNextValidTuple();
+            void CacheTuple();  // Load current tuple into cache
             
             BufferPoolManager *bpm_;
             page_id_t current_page_id_;
             uint32_t current_slot_;
             Transaction *txn_;
             bool is_end_;
+            
+            // Cached tuple to avoid repeated reads
+            Tuple cached_tuple_;
+            bool has_cached_tuple_ = false;
         };
 
         Iterator Begin(Transaction *txn = nullptr);

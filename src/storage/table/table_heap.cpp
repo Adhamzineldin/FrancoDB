@@ -142,26 +142,46 @@ namespace francodb {
     TableHeap::Iterator::Iterator(BufferPoolManager *bpm, page_id_t page_id,
                                   uint32_t slot_id, Transaction *txn, bool is_end)
         : bpm_(bpm), current_page_id_(page_id), current_slot_(slot_id),
-          txn_(txn), is_end_(is_end) {
+          txn_(txn), is_end_(is_end), has_cached_tuple_(false) {
         if (!is_end_) {
             AdvanceToNextValidTuple();
         }
     }
 
     Tuple TableHeap::Iterator::operator*() {
+        // If we have a cached tuple, return a copy
+        if (has_cached_tuple_) {
+            return cached_tuple_;
+        }
+        
+        // Otherwise fetch it (shouldn't normally happen if using correctly)
+        CacheTuple();
+        return cached_tuple_;
+    }
+
+    void TableHeap::Iterator::CacheTuple() {
+        if (is_end_ || current_page_id_ == INVALID_PAGE_ID) {
+            has_cached_tuple_ = false;
+            return;
+        }
+        
         Page *page = bpm_->FetchPage(current_page_id_);
+        if (page == nullptr) {
+            has_cached_tuple_ = false;
+            return;
+        }
+        
         auto *table_page = reinterpret_cast<TablePage *>(page->GetData());
-
         RID rid(current_page_id_, current_slot_);
-        Tuple tuple;
-        table_page->GetTuple(rid, &tuple, txn_);
-
+        
+        has_cached_tuple_ = table_page->GetTuple(rid, &cached_tuple_, txn_);
+        
         bpm_->UnpinPage(current_page_id_, false);
-        return tuple;
     }
 
     TableHeap::Iterator &TableHeap::Iterator::operator++() {
         current_slot_++;
+        has_cached_tuple_ = false;  // Invalidate cache
         AdvanceToNextValidTuple();
         return *this;
     }
@@ -177,6 +197,7 @@ namespace francodb {
             Page *page = bpm_->FetchPage(current_page_id_);
             if (page == nullptr) {
                 is_end_ = true;
+                has_cached_tuple_ = false;
                 return;
             }
 
@@ -186,10 +207,10 @@ namespace francodb {
             // Find next valid tuple in current page
             while (current_slot_ < tuple_count) {
                 RID rid(current_page_id_, current_slot_);
-                Tuple tuple;
-                if (table_page->GetTuple(rid, &tuple, txn_)) {
+                if (table_page->GetTuple(rid, &cached_tuple_, txn_)) {
+                    has_cached_tuple_ = true;
                     bpm_->UnpinPage(current_page_id_, false);
-                    return; // Found valid tuple
+                    return; // Found valid tuple and cached it
                 }
                 current_slot_++;
             }
@@ -203,6 +224,7 @@ namespace francodb {
         }
 
         is_end_ = true;
+        has_cached_tuple_ = false;
     }
 
     TableHeap::Iterator TableHeap::Begin(Transaction *txn) {
