@@ -3,6 +3,8 @@
 #include <cassert>
 #include <filesystem>
 
+#include "storage/disk/disk_manager.h"
+#include "buffer/buffer_pool_manager.h"
 #include "catalog/catalog.h"
 #include "storage/table/tuple.h"
 #include "common/value.h"

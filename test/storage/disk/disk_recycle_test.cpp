@@ -1,8 +1,9 @@
 #include <iostream>
 #include <filesystem>
 #include <cassert>
-#include "catalog/catalog.h"
 #include "storage/disk/disk_manager.h"
+#include "buffer/buffer_pool_manager.h"
+#include "catalog/catalog.h"
 
 using namespace francodb;
 
