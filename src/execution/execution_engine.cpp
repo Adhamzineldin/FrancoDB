@@ -45,6 +45,13 @@ namespace francodb {
           next_txn_id_(1),
           in_explicit_transaction_(false) {
         exec_ctx_ = new ExecutorContext(bpm_, catalog_, nullptr, log_manager_);
+        
+        // Initialize specialized executors (SRP - Issue #11 fix)
+        ddl_executor_ = std::make_unique<DDLExecutor>(catalog_, log_manager_);
+        dml_executor_ = std::make_unique<DMLExecutor>(bpm_, catalog_, log_manager_);
+        
+        // Initialize the executor factory (OCP - Issue #10 fix)
+        InitializeExecutorFactory();
     }
 
     ExecutionEngine::~ExecutionEngine() {
@@ -71,6 +78,18 @@ namespace francodb {
     }
 
 
+    // ========================================================================
+    // FACTORY PATTERN INITIALIZATION (Issue #10 - OCP Fix)
+    // ========================================================================
+    void ExecutionEngine::InitializeExecutorFactory() {
+        // The ExecutorRegistry handles registration of all statement handlers
+        // This is called once at startup
+        // See executor_registry.cpp for the full registration list
+    }
+
+    // ========================================================================
+    // MAIN EXECUTE METHOD - Factory Pattern (Issue #10 & #11 Fix)
+    // ========================================================================
     ExecutionResult ExecutionEngine::Execute(Statement *stmt, SessionContext *session) {
         if (stmt == nullptr) return ExecutionResult::Error("Empty Statement");
 
@@ -97,126 +116,140 @@ namespace francodb {
         // =================================================================================
 
         try {
+            // Get transaction for DML operations
+            Transaction* txn = GetCurrentTransactionForWrite();
+            StatementType type = stmt->GetType();
+            
+            // =================================================================
+            // DELEGATION TO SPECIALIZED EXECUTORS (Issue #10 & #11 Fix)
+            // =================================================================
+            // Instead of a giant switch statement, we delegate to focused classes:
+            // - DDLExecutor: CREATE/DROP/ALTER operations
+            // - DMLExecutor: INSERT/SELECT/UPDATE/DELETE operations
+            // - Inline: System/Transaction/Database operations (minimal)
+            // =================================================================
+            
             ExecutionResult res;
-            switch (stmt->GetType()) {
-                // --- DDL ---
-                case StatementType::CREATE_INDEX: res = ExecuteCreateIndex(dynamic_cast<CreateIndexStatement *>(stmt));
-                    break;
-                case StatementType::CREATE: res = ExecuteCreate(dynamic_cast<CreateStatement *>(stmt));
-                    break;
-                case StatementType::DROP:
-                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
-                        return ExecutionResult::Error("Cannot drop tables in system database");
+            
+            // --- DDL OPERATIONS (Delegated to DDLExecutor) ---
+            if (type == StatementType::CREATE || type == StatementType::CREATE_TABLE) {
+                auto* create_stmt = dynamic_cast<CreateStatement*>(stmt);
+                if (session && !session->current_db.empty()) {
+                    if ((session->current_db == "francodb" || session->current_db == "system") 
+                        && session->role != UserRole::SUPERADMIN) {
+                        return ExecutionResult::Error("Cannot create tables in reserved database");
                     }
-                    res = ExecuteDrop(dynamic_cast<DropStatement *>(stmt));
-                    break;
-
-                // --- USER MANAGEMENT ---
-                case StatementType::CREATE_USER:
-                    res = ExecuteCreateUser(dynamic_cast<CreateUserStatement *>(stmt));
-                    break;
-                case StatementType::ALTER_USER_ROLE:
-                    res = ExecuteAlterUserRole(dynamic_cast<AlterUserRoleStatement *>(stmt));
-                    break;
-                case StatementType::DELETE_USER:
-                    res = ExecuteDeleteUser(dynamic_cast<DeleteUserStatement *>(stmt));
-                    break;
-
-                // --- DML ---
-                case StatementType::INSERT:
-                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
-                        return ExecutionResult::Error("Cannot modify system database tables");
-                    }
-                    res = ExecuteInsert(dynamic_cast<InsertStatement *>(stmt));
-                    break;
-                case StatementType::SELECT: res = ExecuteSelect(dynamic_cast<SelectStatement *>(stmt), session);
-                    break;
-                case StatementType::DELETE_CMD:
-                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
-                        return ExecutionResult::Error("Cannot modify system database tables");
-                    }
-                    res = ExecuteDelete(dynamic_cast<DeleteStatement *>(stmt));
-                    break;
-                case StatementType::UPDATE_CMD:
-                    if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
-                        return ExecutionResult::Error("Cannot modify system database tables");
-                    }
-                    res = ExecuteUpdate(dynamic_cast<UpdateStatement *>(stmt));
-                    break;
-
-                // --- SYSTEM & METADATA ---
-                case StatementType::SHOW_DATABASES: res = ExecuteShowDatabases(
-                                                        dynamic_cast<ShowDatabasesStatement *>(stmt), session);
-                    break;
-                case StatementType::SHOW_TABLES: res = ExecuteShowTables(dynamic_cast<ShowTablesStatement *>(stmt),
-                                                                         session);
-                    break;
-                case StatementType::SHOW_STATUS: res = ExecuteShowStatus(dynamic_cast<ShowStatusStatement *>(stmt),
-                                                                         session);
-                    break;
-                case StatementType::WHOAMI: res = ExecuteWhoAmI(dynamic_cast<WhoAmIStatement *>(stmt), session);
-                    break;
-                case StatementType::SHOW_USERS: res = ExecuteShowUsers(dynamic_cast<ShowUsersStatement *>(stmt));
-                    break;
-                case StatementType::DESCRIBE_TABLE:
-                    res = ExecuteDescribeTable(dynamic_cast<DescribeTableStatement *>(stmt));
-                    break;
-                case StatementType::SHOW_CREATE_TABLE:
-                    res = ExecuteShowCreateTable(dynamic_cast<ShowCreateTableStatement *>(stmt));
-                    break;
-                case StatementType::ALTER_TABLE:
-                    res = ExecuteAlterTable(dynamic_cast<AlterTableStatement *>(stmt));
-                    break;
-
-                // --- TRANSACTIONS ---
-                case StatementType::BEGIN: res = ExecuteBegin();
-                    break;
-                case StatementType::ROLLBACK: res = ExecuteRollback();
-                    break;
-                case StatementType::COMMIT: res = ExecuteCommit();
-                    break;
-
-                // --- DB MGMT ---
-                case StatementType::CREATE_DB: {
-                    auto *create_db = dynamic_cast<CreateDatabaseStatement *>(stmt);
-                    return ExecuteCreateDatabase(create_db, session);
                 }
-                case StatementType::USE_DB: {
-                    auto *use_db = dynamic_cast<UseDatabaseStatement *>(stmt);
-                    return ExecuteUseDatabase(use_db, session);
+                res = ddl_executor_->CreateTable(create_stmt);
+            }
+            else if (type == StatementType::CREATE_INDEX) {
+                res = ddl_executor_->CreateIndex(dynamic_cast<CreateIndexStatement*>(stmt));
+            }
+            else if (type == StatementType::DROP) {
+                if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                    return ExecutionResult::Error("Cannot drop tables in system database");
                 }
-                case StatementType::DROP_DB: {
-                    auto *drop_db = dynamic_cast<DropDatabaseStatement *>(stmt);
-                    return ExecuteDropDatabase(drop_db, session);
+                res = ddl_executor_->DropTable(dynamic_cast<DropStatement*>(stmt));
+            }
+            else if (type == StatementType::DESCRIBE_TABLE) {
+                res = ddl_executor_->DescribeTable(dynamic_cast<DescribeTableStatement*>(stmt));
+            }
+            else if (type == StatementType::SHOW_CREATE_TABLE) {
+                res = ddl_executor_->ShowCreateTable(dynamic_cast<ShowCreateTableStatement*>(stmt));
+            }
+            else if (type == StatementType::ALTER_TABLE) {
+                res = ddl_executor_->AlterTable(dynamic_cast<AlterTableStatement*>(stmt));
+            }
+            
+            // --- DML OPERATIONS (Delegated to DMLExecutor) ---
+            else if (type == StatementType::INSERT) {
+                if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                    return ExecutionResult::Error("Cannot modify system database tables");
                 }
-
-                case StatementType::CREATE_TABLE: {
-                    if (session->current_db.empty()) {
-                        return ExecutionResult::Error("No database selected. Use 'USE DATABASE_NAME' first.");
-                    }
-                    if ((session->current_db == "francodb" || session->current_db == "system") && session->role !=
-                        UserRole::SUPERADMIN) {
-                        return ExecutionResult::Error(
-                            "Cannot create tables in reserved database: " + session->current_db);
-                    }
-                    auto *create = dynamic_cast<CreateStatement *>(stmt);
-                    return ExecuteCreate(create);
+                res = dml_executor_->Insert(dynamic_cast<InsertStatement*>(stmt), txn);
+            }
+            else if (type == StatementType::SELECT) {
+                res = dml_executor_->Select(dynamic_cast<SelectStatement*>(stmt), session, txn);
+            }
+            else if (type == StatementType::UPDATE_CMD) {
+                if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                    return ExecutionResult::Error("Cannot modify system database tables");
                 }
-
-                // --- RECOVERY OPS (Protected by Exclusive Lock above) ---
-                case StatementType::CHECKPOINT:
-                    return ExecuteCheckpoint();
-
-                case StatementType::RECOVER:
-                    return ExecuteRecover(dynamic_cast<RecoverStatement *>(stmt));
-
-                default: return ExecutionResult::Error("Unknown Statement Type in Engine.");
+                res = dml_executor_->Update(dynamic_cast<UpdateStatement*>(stmt), txn);
+            }
+            else if (type == StatementType::DELETE_CMD) {
+                if (session && session->current_db == "system" && session->role != UserRole::SUPERADMIN) {
+                    return ExecutionResult::Error("Cannot modify system database tables");
+                }
+                res = dml_executor_->Delete(dynamic_cast<DeleteStatement*>(stmt), txn);
+            }
+            
+            // --- TRANSACTION OPERATIONS ---
+            else if (type == StatementType::BEGIN) {
+                res = ExecuteBegin();
+            }
+            else if (type == StatementType::COMMIT) {
+                res = ExecuteCommit();
+            }
+            else if (type == StatementType::ROLLBACK) {
+                res = ExecuteRollback();
+            }
+            
+            // --- DATABASE MANAGEMENT ---
+            else if (type == StatementType::CREATE_DB) {
+                res = ExecuteCreateDatabase(dynamic_cast<CreateDatabaseStatement*>(stmt), session);
+            }
+            else if (type == StatementType::USE_DB) {
+                res = ExecuteUseDatabase(dynamic_cast<UseDatabaseStatement*>(stmt), session);
+            }
+            else if (type == StatementType::DROP_DB) {
+                res = ExecuteDropDatabase(dynamic_cast<DropDatabaseStatement*>(stmt), session);
+            }
+            
+            // --- USER MANAGEMENT ---
+            else if (type == StatementType::CREATE_USER) {
+                res = ExecuteCreateUser(dynamic_cast<CreateUserStatement*>(stmt));
+            }
+            else if (type == StatementType::ALTER_USER_ROLE) {
+                res = ExecuteAlterUserRole(dynamic_cast<AlterUserRoleStatement*>(stmt));
+            }
+            else if (type == StatementType::DELETE_USER) {
+                res = ExecuteDeleteUser(dynamic_cast<DeleteUserStatement*>(stmt));
+            }
+            
+            // --- SYSTEM OPERATIONS ---
+            else if (type == StatementType::SHOW_DATABASES) {
+                res = ExecuteShowDatabases(dynamic_cast<ShowDatabasesStatement*>(stmt), session);
+            }
+            else if (type == StatementType::SHOW_TABLES) {
+                res = ExecuteShowTables(dynamic_cast<ShowTablesStatement*>(stmt), session);
+            }
+            else if (type == StatementType::SHOW_STATUS) {
+                res = ExecuteShowStatus(dynamic_cast<ShowStatusStatement*>(stmt), session);
+            }
+            else if (type == StatementType::SHOW_USERS) {
+                res = ExecuteShowUsers(dynamic_cast<ShowUsersStatement*>(stmt));
+            }
+            else if (type == StatementType::WHOAMI) {
+                res = ExecuteWhoAmI(dynamic_cast<WhoAmIStatement*>(stmt), session);
+            }
+            
+            // --- RECOVERY OPERATIONS ---
+            else if (type == StatementType::CHECKPOINT) {
+                res = ExecuteCheckpoint();
+            }
+            else if (type == StatementType::RECOVER) {
+                res = ExecuteRecover(dynamic_cast<RecoverStatement*>(stmt));
+            }
+            
+            else {
+                return ExecutionResult::Error("Unknown Statement Type");
             }
 
-            // Auto-commit for single statements
-            if (stmt->GetType() == StatementType::INSERT ||
-                stmt->GetType() == StatementType::UPDATE_CMD ||
-                stmt->GetType() == StatementType::DELETE_CMD) {
+            // Auto-commit for single DML statements
+            if (type == StatementType::INSERT ||
+                type == StatementType::UPDATE_CMD ||
+                type == StatementType::DELETE_CMD) {
                 AutoCommitIfNeeded();
             }
             return res;
@@ -238,198 +271,9 @@ namespace francodb {
         return oss.str();
     }
 
-
-    ExecutionResult ExecutionEngine::ExecuteCreate(CreateStatement *stmt) {
-        Schema schema(stmt->columns_);
-
-        // Validate foreign keys BEFORE creating the table
-        for (const auto &fk: stmt->foreign_keys_) {
-            // Check if referenced table exists
-            TableMetadata *ref_table = catalog_->GetTable(fk.ref_table);
-            if (!ref_table) {
-                return ExecutionResult::Error("Referenced table does not exist: " + fk.ref_table);
-            }
-
-            // Check if all referenced columns exist in the referenced table
-            for (const auto &ref_col: fk.ref_columns) {
-                int col_idx = ref_table->schema_.GetColIdx(ref_col);
-                if (col_idx < 0) {
-                    return ExecutionResult::Error("Referenced column '" + ref_col +
-                                                  "' does not exist in table '" + fk.ref_table + "'");
-                }
-            }
-
-            // Check if all local columns exist in the table being created
-            for (const auto &local_col: fk.columns) {
-                bool found = false;
-                for (const auto &col: stmt->columns_) {
-                    if (col.GetName() == local_col) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    return ExecutionResult::Error("Foreign key column '" + local_col +
-                                                  "' does not exist in table definition");
-                }
-            }
-        }
-
-        TableMetadata *table_info = catalog_->CreateTable(stmt->table_name_, schema);
-        if (!table_info) {
-            return ExecutionResult::Error("Table already exists: " + stmt->table_name_);
-        }
-
-        // Store foreign keys in table metadata
-        table_info->foreign_keys_ = stmt->foreign_keys_;
-        
-        catalog_->SaveCatalog();
-
-        return ExecutionResult::Message("CREATE TABLE SUCCESS");
-    }
-
-    ExecutionResult ExecutionEngine::ExecuteCreateIndex(CreateIndexStatement *stmt) {
-        auto *index = catalog_->CreateIndex(stmt->index_name_, stmt->table_name_, stmt->column_name_);
-        if (index == nullptr) return ExecutionResult::Error("Failed to create index");
-        return ExecutionResult::Message("CREATE INDEX SUCCESS");
-    }
-
-    ExecutionResult ExecutionEngine::ExecuteInsert(InsertStatement *stmt) {
-        InsertExecutor executor(exec_ctx_, stmt, GetCurrentTransactionForWrite());
-        executor.Init();
-        Tuple t;
-        int count = 0;
-        while (executor.Next(&t)) count++; // Usually 1 for single insert
-        return ExecutionResult::Message("INSERT 1"); // Assuming simple insert
-    }
-
-    ExecutionResult ExecutionEngine::ExecuteSelect(SelectStatement *stmt, SessionContext *session) {
-        AbstractExecutor *executor = nullptr;
-        bool use_index = false;
-        
-        TableHeap* target_heap = nullptr;
-        std::unique_ptr<TableHeap> shadow_heap = nullptr;
-
-        // 1. DETERMINE DATA SOURCE (Live vs Time Travel)
-        if (stmt->as_of_timestamp_ > 0) {
-            // Get current database from session
-            std::string db_name = (session) ? session->current_db : "system";
-            std::cout << "[TIME TRAVEL] Building snapshot as of " << stmt->as_of_timestamp_ 
-                      << " for database '" << db_name << "'..." << std::endl;
-            
-            if (log_manager_) {
-                log_manager_->Flush(true);     
-            }
-            
-            shadow_heap = SnapshotManager::BuildSnapshot(
-                stmt->table_name_, 
-                stmt->as_of_timestamp_, 
-                bpm_, 
-                log_manager_, 
-                catalog_,
-                db_name  // Pass the correct database name
-            );
-            target_heap = shadow_heap.get();
-            use_index = false; 
-            
-        } else {
-            auto table_info = catalog_->GetTable(stmt->table_name_);
-            if (!table_info) return ExecutionResult::Error("Table not found: " + stmt->table_name_);
-            target_heap = table_info->table_heap_.get();
-        }
-
-        // 2. OPTIMIZER
-        if (stmt->as_of_timestamp_ == 0 && !stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
-            auto &cond = stmt->where_clause_[0];
-            auto indexes = catalog_->GetTableIndexes(stmt->table_name_);
-            
-            for (auto *idx: indexes) {
-                if (idx->col_name_ == cond.column && idx->b_plus_tree_) {
-                    try {
-                        // [FIX] Use .ToString() before std::stoi
-                        Value lookup_val(TypeId::INTEGER, std::stoi(cond.value.ToString()));
-                        
-                        executor = new IndexScanExecutor(exec_ctx_, stmt, idx, lookup_val, GetCurrentTransaction());
-                        use_index = true;
-                        break;
-                    } catch (...) {}
-                }
-            }
-        }
-
-        if (!use_index) {
-            // Pass target_heap to SeqScanExecutor
-            executor = new SeqScanExecutor(exec_ctx_, stmt, GetCurrentTransaction(), target_heap);
-        }
-
-        try {
-            executor->Init();
-        } catch (...) {
-            if (executor) delete executor;
-            return ExecutionResult::Error("Execution Init Failed");
-        }
-
-        // 3. COLLECT RESULTS
-        auto rs = std::make_shared<ResultSet>();
-        const Schema *output_schema = executor->GetOutputSchema();
-
-        std::vector<uint32_t> column_indices;
-        if (stmt->select_all_) {
-            for (uint32_t i = 0; i < output_schema->GetColumnCount(); i++) {
-                rs->column_names.push_back(output_schema->GetColumn(i).GetName());
-                column_indices.push_back(i);
-            }
-        } else {
-            for (const auto &col_name: stmt->columns_) {
-                int col_idx = output_schema->GetColIdx(col_name);
-                if (col_idx < 0) {
-                    delete executor;
-                    return ExecutionResult::Error("Column not found: " + col_name);
-                }
-                rs->column_names.push_back(col_name);
-                column_indices.push_back(static_cast<uint32_t>(col_idx));
-            }
-        }
-
-        std::vector<std::vector<std::string>> all_rows;
-        Tuple t;
-        while (executor->Next(&t)) {
-            std::vector<std::string> row_strings;
-            for (uint32_t col_idx: column_indices) {
-                row_strings.push_back(t.GetValue(*output_schema, col_idx).ToString());
-            }
-            all_rows.push_back(row_strings);
-        }
-        delete executor;
-
-        // [SIMPLE] Just fill result set (Limit/Sort omitted for brevity but should be here)
-        for (const auto& row : all_rows) {
-            rs->AddRow(row);
-        }
-
-        return ExecutionResult::Data(rs);
-    }
-
-    ExecutionResult ExecutionEngine::ExecuteDrop(DropStatement *stmt) {
-        if (!catalog_->DropTable(stmt->table_name_)) return ExecutionResult::Error("Table not found");
-        return ExecutionResult::Message("DROP TABLE SUCCESS");
-    }
-
-    ExecutionResult ExecutionEngine::ExecuteDelete(DeleteStatement *stmt) {
-        DeleteExecutor executor(exec_ctx_, stmt, GetCurrentTransactionForWrite());
-        executor.Init();
-        Tuple t;
-        executor.Next(&t); // The executor prints log internally currently, but we can change that later
-        return ExecutionResult::Message("DELETE SUCCESS");
-    }
-
-    ExecutionResult ExecutionEngine::ExecuteUpdate(UpdateStatement *stmt) {
-        UpdateExecutor executor(exec_ctx_, stmt, GetCurrentTransactionForWrite());
-        executor.Init();
-        Tuple t;
-        executor.Next(&t);
-        return ExecutionResult::Message("UPDATE SUCCESS");
-    }
+    // ========================================================================
+    // TRANSACTION METHODS (Kept inline - simple coordination)
+    // ========================================================================
 
     ExecutionResult ExecutionEngine::ExecuteBegin() {
         if (current_transaction_ && in_explicit_transaction_) return ExecutionResult::Error("Transaction in progress");
@@ -870,164 +714,11 @@ namespace francodb {
         }
     }
 
-    // ====================================================================
-    // DESCRIBE TABLE / DESC
-    // ====================================================================
-    ExecutionResult ExecutionEngine::ExecuteDescribeTable(DescribeTableStatement *stmt) {
-        TableMetadata *table_info = catalog_->GetTable(stmt->table_name_);
-        if (!table_info) {
-            return ExecutionResult::Error("Table not found: " + stmt->table_name_);
-        }
-
-        auto rs = std::make_shared<ResultSet>();
-        rs->column_names = {"Field", "Type", "Null", "Key", "Default", "Extra"};
-
-        const Schema &schema = table_info->schema_;
-        for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
-            const Column &col = schema.GetColumn(i);
-
-            // Field name
-            std::string field = col.GetName();
-
-            // Type
-            std::string type;
-            switch (col.GetType()) {
-                case TypeId::INTEGER: type = "RAKAM";
-                    break;
-                case TypeId::DECIMAL: type = "KASR";
-                    break;
-                case TypeId::VARCHAR: type = "GOMLA(" + std::to_string(col.GetLength()) + ")";
-                    break;
-                default: type = "UNKNOWN";
-                    break;
-            }
-
-            // Null
-            std::string null_str = col.IsNullable() ? "YES" : "NO";
-
-            // Key
-            std::string key_str;
-            if (col.IsPrimaryKey()) key_str = "PRI";
-            else if (col.IsUnique()) key_str = "UNI";
-            else key_str = "";
-
-            // Default
-            std::string default_str = col.HasDefaultValue() ? ValueToString(col.GetDefaultValue().value()) : "NULL";
-
-            // Extra - includes CHECK, AUTO_INCREMENT, and FOREIGN KEY info
-            std::string extra;
-            if (col.IsAutoIncrement()) extra = "AUTO_INCREMENT";
-            if (col.HasCheckConstraint()) {
-                if (!extra.empty()) extra += ", ";
-                extra += "CHECK(" + col.GetCheckConstraint() + ")";
-            }
-
-            // Check if this column is part of a foreign key
-            for (const auto &fk: table_info->foreign_keys_) {
-                for (const auto &fk_col: fk.columns) {
-                    if (fk_col == col.GetName()) {
-                        if (!extra.empty()) extra += ", ";
-                        extra += "FK(" + fk.ref_table + "." + fk.ref_columns[0] + ")";
-                        break;
-                    }
-                }
-            }
-
-            rs->AddRow({field, type, null_str, key_str, default_str, extra});
-        }
-
-        return ExecutionResult::Data(rs);
-    }
-
-    // ====================================================================
-    // SHOW CREATE TABLE
-    // ====================================================================
-    ExecutionResult ExecutionEngine::ExecuteShowCreateTable(ShowCreateTableStatement *stmt) {
-        TableMetadata *table_info = catalog_->GetTable(stmt->table_name_);
-        if (!table_info) {
-            return ExecutionResult::Error("Table not found: " + stmt->table_name_);
-        }
-
-        auto rs = std::make_shared<ResultSet>();
-        rs->column_names = {"Table", "Create Table"};
-
-        std::string create_sql = "2E3MEL GADWAL " + stmt->table_name_ + " (\n";
-
-        const Schema &schema = table_info->schema_;
-        for (uint32_t i = 0; i < schema.GetColumnCount(); i++) {
-            const Column &col = schema.GetColumn(i);
-
-            create_sql += "  " + col.GetName() + " ";
-
-            // Type
-            switch (col.GetType()) {
-                case TypeId::INTEGER: create_sql += "RAKAM";
-                    break;
-                case TypeId::DECIMAL: create_sql += "KASR";
-                    break;
-                case TypeId::VARCHAR: create_sql += "GOMLA";
-                    break;
-                default: create_sql += "UNKNOWN";
-                    break;
-            }
-
-            // Primary key
-            if (col.IsPrimaryKey()) create_sql += " ASASI";
-
-            // Nullable
-            if (!col.IsNullable()) create_sql += " NOT NULL";
-
-            // Unique
-            if (col.IsUnique()) create_sql += " UNIQUE";
-
-            // Auto increment
-            if (col.IsAutoIncrement()) create_sql += " AUTO_INCREMENT";
-
-            // Check constraint
-            if (col.HasCheckConstraint()) {
-                create_sql += " FA7S (" + col.GetCheckConstraint() + ")";
-            }
-
-            // Default value
-            if (col.HasDefaultValue()) {
-                create_sql += " DEFAULT " + ValueToString(col.GetDefaultValue().value());
-            }
-
-            if (i < schema.GetColumnCount() - 1) create_sql += ",";
-            create_sql += "\n";
-        }
-
-        // Add foreign keys
-        if (!table_info->foreign_keys_.empty()) {
-            for (const auto &fk: table_info->foreign_keys_) {
-                create_sql += "  , FOREIGN KEY (";
-                for (size_t j = 0; j < fk.columns.size(); j++) {
-                    if (j > 0) create_sql += ", ";
-                    create_sql += fk.columns[j];
-                }
-                create_sql += ") YOSHEER " + fk.ref_table + " (";
-                for (size_t j = 0; j < fk.ref_columns.size(); j++) {
-                    if (j > 0) create_sql += ", ";
-                    create_sql += fk.ref_columns[j];
-                }
-                create_sql += ")\n";
-            }
-        }
-
-        create_sql += ");";
-
-        rs->AddRow({stmt->table_name_, create_sql});
-        return ExecutionResult::Data(rs);
-    }
-
-    // ====================================================================
-    // ALTER TABLE
-    // ====================================================================
-    ExecutionResult ExecutionEngine::ExecuteAlterTable(AlterTableStatement *stmt) {
-        return ExecutionResult::Error(
-            "ALTER TABLE is not fully implemented yet. Use DROP and CREATE to modify schema.");
-    }
-
+    // ========================================================================
+    // DDL METHODS REMOVED - Now handled by DDLExecutor
+    // ExecuteDescribeTable, ExecuteShowCreateTable, ExecuteAlterTable
+    // See: ddl_executor.cpp
+    // ========================================================================
 
     ExecutionResult ExecutionEngine::ExecuteCheckpoint() {
         // Permission Check (Optional: restrict to Admin)
