@@ -9,7 +9,7 @@
 #include "common/config.h"
 #include "storage/page/page.h"
 #include "buffer/replacer.h"
-#include "buffer/lru_replacer.h"  // For CreateReplacer implementation
+#include "buffer/clock_replacer.h"  // Clock is better for high-concurrency
 #include "storage/disk/disk_manager.h"
 #include "storage/storage_interface.h"  // For IBufferManager
 
@@ -415,10 +415,14 @@ private:
     
     /**
      * Create a replacer for a partition.
-     * Uses LRU eviction policy by default.
+     * Uses Clock (Second Chance) eviction policy for high-concurrency performance.
+     * Clock is preferred over LRU because:
+     * - Lower lock contention (just flips reference bit)
+     * - Better cache performance (no pointer chasing)
+     * - Used by PostgreSQL for the same reasons
      */
     Replacer* CreateReplacer(size_t capacity) {
-        return new LRUReplacer(capacity);
+        return new ClockReplacer(capacity);
     }
     
     // ========================================================================
