@@ -363,28 +363,39 @@ namespace francodb {
     ExecutionResult ExecutionEngine::ExecuteRecover(RecoverStatement *stmt) {
         std::cout << "[SYSTEM] Preparing for Time Travel..." << std::endl;
 
-        uint64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-
-        if (stmt->timestamp_ > now) {
-            return ExecutionResult::Error("Cannot travel to the future! Timestamp is > Now.");
-        }
-
-        if (stmt->timestamp_ == 0) {
-            return ExecutionResult::Error("Invalid timestamp (0).");
+        uint64_t target_time = stmt->timestamp_;
+        
+        // Special case: UINT64_MAX means "recover to latest"
+        bool recover_to_latest = (target_time == UINT64_MAX);
+        
+        if (recover_to_latest) {
+            std::cout << "[SYSTEM] Recovering to LATEST state..." << std::endl;
+        } else {
+            uint64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            
+            // Allow timestamps up to 1 minute in the future (treat as "now")
+            uint64_t one_minute = 60ULL * 1000000ULL;  // microseconds
+            if (target_time > now + one_minute) {
+                return ExecutionResult::Error("Cannot travel to the future! Use 'RECOVER TO LATEST' for current state.");
+            }
+            
+            if (target_time == 0) {
+                return ExecutionResult::Error("Invalid timestamp (0). Use 'RECOVER TO LATEST' for current state.");
+            }
+            
+            std::cout << "[SYSTEM] Initiating Time Travel to: " << target_time << std::endl;
         }
 
         // Force Buffer Pool Flush (but don't stop the flush thread - that causes deadlock)
         bpm_->FlushAllPages();
         log_manager_->Flush(true);  // Force flush the log
 
-        std::cout << "[SYSTEM] Initiating Time Travel to: " << stmt->timestamp_ << std::endl;
-
         try {
             CheckpointManager cp_mgr(bpm_, log_manager_);
             RecoveryManager recovery(log_manager_, catalog_, bpm_, &cp_mgr);
 
-            recovery.RecoverToTime(stmt->timestamp_);
+            recovery.RecoverToTime(target_time);
             
             // Flush after recovery to persist changes
             bpm_->FlushAllPages();
@@ -394,6 +405,10 @@ namespace francodb {
         }
 
         std::cout << "[SYSTEM] Time Travel Complete. Resuming normal operations." << std::endl;
+        
+        if (recover_to_latest) {
+            return ExecutionResult::Message("RECOVERED TO LATEST. System state restored to most recent.");
+        }
         return ExecutionResult::Message("TIME TRAVEL COMPLETE. System state reverted.");
     }
 } // namespace francodb

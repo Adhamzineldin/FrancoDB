@@ -106,8 +106,15 @@ namespace francodb {
             
             uint64_t timestamp = 0;
 
+            // CASE 0: LATEST / NOW / CURRENT - recover to most recent state
+            if (current_token_.type == TokenType::LATEST || 
+                current_token_.type == TokenType::NOW || 
+                current_token_.type == TokenType::CURRENT) {
+                timestamp = UINT64_MAX;  // Special value meaning "recover to latest"
+                Advance(); // Eat the keyword
+            }
             // CASE 1: Human Readable String ('21/01/2026 14:30')
-            if (current_token_.type == TokenType::STRING_LIT) {
+            else if (current_token_.type == TokenType::STRING_LIT) {
                 timestamp = ParseHumanDateToMicros(current_token_.text);
                 Advance(); // Eat String
             }
@@ -117,7 +124,8 @@ namespace francodb {
                 Advance(); // Eat Number
             } 
             else {
-                throw Exception(ExceptionType::PARSER, "Expected Date String ('DD/MM/YYYY HH:MM') or Timestamp Number");
+                throw Exception(ExceptionType::PARSER, 
+                    "Expected Date String ('DD/MM/YYYY HH:MM'), Timestamp Number, or LATEST/NOW/CURRENT");
             }
             
             if (!Match(TokenType::SEMICOLON))

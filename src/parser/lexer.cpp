@@ -97,6 +97,16 @@ namespace francodb {
         {"ERGA3",      TokenType::RECOVER},    // "Return" / "Go Back"
         {"TO",         TokenType::TO},
         {"ELA",        TokenType::TO},
+        {"LATEST",     TokenType::LATEST},     // Recover to latest state
+        {"A5ER",       TokenType::LATEST},     // Arabic: "latest"
+        {"ASLHA",      TokenType::LATEST},     // Arabic: "original"
+        {"NOW",        TokenType::NOW},        // Current time
+        {"DELWA2TY",   TokenType::NOW},        // Arabic: "now"
+        {"CURRENT",    TokenType::CURRENT},    // Current state
+        {"7ALY",       TokenType::CURRENT},    // Arabic: "current"
+        {"AS",         TokenType::AS},         // For AS OF queries
+        {"K",          TokenType::AS},         // Arabic: "as"
+        {"OF",         TokenType::OF},         // For AS OF queries
         
         // --- GROUP BY & AGGREGATES ---
         {"MAGMO3A", TokenType::GROUP},
@@ -386,6 +396,11 @@ namespace francodb {
             case TokenType::CHECKPOINT: return "CHECKPOINT";
             case TokenType::RECOVER:    return "RECOVER";
             case TokenType::TO:         return "TO";
+            case TokenType::LATEST:     return "LATEST";
+            case TokenType::NOW:        return "NOW";
+            case TokenType::CURRENT:    return "CURRENT";
+            case TokenType::AS:         return "AS";
+            case TokenType::OF:         return "OF";
             
             // GROUP BY & Aggregates
             case TokenType::GROUP: return "GROUP";

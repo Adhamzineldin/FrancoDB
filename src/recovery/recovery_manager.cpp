@@ -736,22 +736,121 @@ namespace francodb {
 
     void RecoveryManager::RecoverToTime(uint64_t target_time) {
         std::cout << "[RECOVER_TO] Recovering to timestamp: " << target_time << std::endl;
-
-        // Determine strategy: Undo (short jump) or Redo from checkpoint (long jump)
-        if (ShouldUseUndoStrategy(target_time)) {
-            std::cout << "[RECOVER_TO] Using UNDO strategy (short jump)" << std::endl;
-            RollbackToTime(target_time);
-        } else {
-            std::cout << "[RECOVER_TO] Using REDO strategy (long jump from checkpoint)" << std::endl;
-            
-            // Find the nearest checkpoint before target_time
-            // For now, just replay from beginning to target_time
-            std::string db_name = log_manager_->GetCurrentDatabase();
-            
-            // Clear current state (in production, we'd truncate the table)
-            // Then replay up to target_time
-            RunRecoveryLoop(db_name, target_time, 0);
+        
+        std::string db_name = log_manager_->GetCurrentDatabase();
+        std::cout << "[RECOVER_TO] Current database: " << db_name << std::endl;
+        
+        // Special case: target_time = 0 or target_time = UINT64_MAX means "recover to latest"
+        // Also allow up to 1 minute in the future to handle "recover to now"
+        uint64_t current_time = LogRecord::GetCurrentTimestamp();
+        bool recover_to_latest = (target_time == 0) || 
+                                 (target_time == UINT64_MAX) ||
+                                 (target_time >= current_time);
+        
+        if (recover_to_latest) {
+            target_time = UINT64_MAX;  // Replay ALL records
+            std::cout << "[RECOVER_TO] Recovering to LATEST state (all log records)" << std::endl;
         }
+        
+        // Get all tables in the catalog
+        auto all_tables = catalog_->GetAllTables();
+        
+        if (all_tables.empty()) {
+            std::cout << "[RECOVER_TO] No tables to recover" << std::endl;
+            return;
+        }
+        
+        for (auto* table_info : all_tables) {
+            if (!table_info || !table_info->table_heap_) {
+                continue;
+            }
+            
+            std::string table_name = table_info->name_;
+            
+            // Skip system tables
+            if (table_name == "franco_users" || table_name.find("sys_") == 0) {
+                continue;
+            }
+            
+            std::cout << "[RECOVER_TO] Rebuilding table: " << table_name << std::endl;
+            
+            // Step 1: Build a snapshot of what the table SHOULD look like at target_time
+            auto snapshot_heap = std::make_unique<TableHeap>(bpm_, nullptr);
+            ReplayIntoHeap(snapshot_heap.get(), table_name, target_time, db_name);
+            
+            // Count tuples in snapshot
+            int snapshot_count = 0;
+            page_id_t snap_page_id = snapshot_heap->GetFirstPageId();
+            while (snap_page_id != INVALID_PAGE_ID) {
+                Page* raw_page = bpm_->FetchPage(snap_page_id);
+                if (!raw_page) break;
+                auto* table_page = reinterpret_cast<TablePage*>(raw_page->GetData());
+                snapshot_count += table_page->GetTupleCount();
+                page_id_t next = table_page->GetNextPageId();
+                bpm_->UnpinPage(snap_page_id, false);
+                snap_page_id = next;
+            }
+            std::cout << "[RECOVER_TO] Snapshot contains " << snapshot_count << " tuples" << std::endl;
+            
+            // Step 2: Clear the current table by marking all tuples as deleted
+            TableHeap* current_heap = table_info->table_heap_.get();
+            page_id_t page_id = current_heap->GetFirstPageId();
+            int deleted_count = 0;
+            
+            while (page_id != INVALID_PAGE_ID) {
+                Page* raw_page = bpm_->FetchPage(page_id);
+                if (!raw_page) break;
+                
+                auto* table_page = reinterpret_cast<TablePage*>(raw_page->GetData());
+                uint32_t tuple_count = table_page->GetTupleCount();
+                
+                for (uint32_t slot = 0; slot < tuple_count; slot++) {
+                    RID rid(page_id, slot);
+                    if (current_heap->MarkDelete(rid, nullptr)) {
+                        deleted_count++;
+                    }
+                }
+                
+                page_id_t next_page = table_page->GetNextPageId();
+                bpm_->UnpinPage(page_id, true);
+                page_id = next_page;
+            }
+            std::cout << "[RECOVER_TO] Deleted " << deleted_count << " existing tuples" << std::endl;
+            
+            // Step 3: Copy tuples from snapshot to current table
+            snap_page_id = snapshot_heap->GetFirstPageId();
+            int restored_count = 0;
+            
+            while (snap_page_id != INVALID_PAGE_ID) {
+                Page* raw_page = bpm_->FetchPage(snap_page_id);
+                if (!raw_page) break;
+                
+                auto* table_page = reinterpret_cast<TablePage*>(raw_page->GetData());
+                uint32_t tuple_count = table_page->GetTupleCount();
+                
+                for (uint32_t slot = 0; slot < tuple_count; slot++) {
+                    RID snapshot_rid(snap_page_id, slot);
+                    Tuple tuple;
+                    if (snapshot_heap->GetTuple(snapshot_rid, &tuple, nullptr)) {
+                        RID new_rid;
+                        if (current_heap->InsertTuple(tuple, &new_rid, nullptr)) {
+                            restored_count++;
+                        }
+                    }
+                }
+                
+                page_id_t next_page = table_page->GetNextPageId();
+                bpm_->UnpinPage(snap_page_id, false);
+                snap_page_id = next_page;
+            }
+            
+            std::cout << "[RECOVER_TO] Restored " << restored_count << " tuples for table: " << table_name << std::endl;
+        }
+        
+        // Flush changes to disk
+        bpm_->FlushAllPages();
+        
+        std::cout << "[RECOVER_TO] Time travel complete." << std::endl;
     }
 
     void RecoveryManager::RecoverToLSN(LogRecord::lsn_t target_lsn) {

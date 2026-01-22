@@ -247,5 +247,16 @@ std::vector<std::string> Catalog::GetAllTableNames() {
     return table_names;
 }
 
+std::vector<TableMetadata*> Catalog::GetAllTables() {
+    std::lock_guard<std::mutex> lock(latch_);
+    std::vector<TableMetadata*> result;
+    for (auto& [oid, table_meta] : tables_) {
+        if (table_meta) {
+            result.push_back(table_meta.get());
+        }
+    }
+    return result;
+}
+
 } // namespace francodb
 

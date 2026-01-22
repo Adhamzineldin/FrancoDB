@@ -134,7 +134,14 @@ namespace francodb {
         
         CHECKPOINT, // "CHECKPOINT"
         RECOVER,    // "RECOVER"
-        TO          // "TO"
+        TO,         // "TO" / "ELA"
+        
+        // --- TIME TRAVEL ---
+        LATEST,     // "LATEST" / "A5ER" - recover to most recent
+        NOW,        // "NOW" / "DELWA2TY" - current time
+        CURRENT,    // "CURRENT" / "7ALY" - current state
+        AS,         // "AS" / "K" - for AS OF queries
+        OF          // "OF" / "MEN" - for AS OF queries
     };
 
     struct Token {
