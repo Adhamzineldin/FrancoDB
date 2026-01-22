@@ -4,10 +4,13 @@
 #include <memory>
 #include <string>
 #include <atomic>
+#include <unordered_map>
+#include <functional>
 #include "execution/execution_result.h"
 #include "execution/executor_context.h"
 #include "parser/statement.h"
 #include "concurrency/transaction.h"
+#include "concurrency/lock_manager.h"
 #include "catalog/catalog.h"
 #include "common/auth_manager.h"
 #include "network/database_registry.h" 
@@ -29,26 +32,23 @@ class TransactionExecutor;
  * 
  * SOLID COMPLIANCE:
  * =================
- * This class follows the Single Responsibility Principle by delegating
- * all specialized operations to focused executor classes:
+ * This class follows the Open/Closed Principle using a dispatch map pattern.
+ * Adding a new statement type only requires adding one entry to InitializeDispatchMap().
+ * No modification to Execute() method is needed!
  * 
- * - DDLExecutor: CREATE/DROP/ALTER TABLE, CREATE INDEX
- * - DMLExecutor: INSERT/SELECT/UPDATE/DELETE
- * - SystemExecutor: SHOW DATABASES/TABLES/STATUS, WHOAMI
- * - UserExecutor: CREATE/ALTER/DELETE USER
- * - DatabaseExecutor: CREATE/USE/DROP DATABASE
- * - TransactionExecutor: BEGIN/COMMIT/ROLLBACK
- * 
- * The ExecutionEngine now only handles:
- * 1. Concurrency gatekeeper (global lock management)
- * 2. Delegation to appropriate executor
- * 3. Recovery operations (CHECKPOINT, RECOVER)
+ * Architecture:
+ * - dispatch_map_: Maps StatementType → Handler function
+ * - Specialized executors handle the actual work (SRP)
+ * - Execute() is a thin coordinator (~30 lines)
  * 
  * @author FrancoDB Team
  */
 class ExecutionEngine {
 public:
     static std::shared_mutex global_lock_;
+    
+    // Handler function type for dispatch map
+    using StatementHandler = std::function<ExecutionResult(Statement*, SessionContext*, Transaction*)>;
     
     ExecutionEngine(BufferPoolManager* bpm, Catalog* catalog, AuthManager* auth_manager, 
                     DatabaseRegistry* db_registry, LogManager* log_manager);
@@ -60,34 +60,36 @@ public:
     // ========================================================================
     
     /**
-     * Execute a statement. Delegates to specialized executors.
+     * Execute a statement using the dispatch map.
+     * No switch/if-else chains - pure lookup + call.
      */
     ExecutionResult Execute(Statement* stmt, SessionContext* session);
     
-    /**
-     * Get the current catalog.
-     */
     Catalog* GetCatalog() { return catalog_; }
-    
-    /**
-     * Get the current transaction.
-     */
     Transaction* GetCurrentTransaction();
-    
-    /**
-     * Get or create transaction for write operations.
-     */
     Transaction* GetCurrentTransactionForWrite();
 
 private:
     // ========================================================================
-    // HELPER METHODS
+    // DISPATCH MAP (Open/Closed Principle)
     // ========================================================================
-    void InitializeExecutorFactory();
-    std::string ValueToString(const Value& v);
+    std::unordered_map<StatementType, StatementHandler> dispatch_map_;
+    
+    /**
+     * Initialize the dispatch map with all statement handlers.
+     * To add a new statement type, just add one line here!
+     */
+    void InitializeDispatchMap();
 
     // ========================================================================
-    // RECOVERY OPERATIONS (Kept inline - require special handling)
+    // HELPER METHODS
+    // ========================================================================
+    std::string ValueToString(const Value& v);
+    std::string CheckPermissions(StatementType type, SessionContext* session);
+    ExecutionResult HandleUseDatabase(UseDatabaseStatement* stmt, SessionContext* session, Transaction* txn);
+
+    // ========================================================================
+    // RECOVERY OPERATIONS
     // ========================================================================
     ExecutionResult ExecuteCheckpoint();
     ExecutionResult ExecuteRecover(RecoverStatement* stmt);
@@ -113,9 +115,13 @@ private:
     std::unique_ptr<TransactionExecutor> transaction_executor_;
     
     // ========================================================================
+    // CONCURRENCY CONTROL
+    // ========================================================================
+    std::unique_ptr<LockManager> lock_manager_;
+    
+    // ========================================================================
     // THREAD SAFETY (Issue #4 & #5 Fix)
     // ========================================================================
-    // Cache-line aligned to prevent false sharing
     alignas(64) std::atomic<int> next_txn_id_{1};
 };
 
