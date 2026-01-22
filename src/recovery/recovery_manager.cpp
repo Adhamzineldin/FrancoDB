@@ -919,23 +919,49 @@ namespace francodb {
         // Check file size
         log_file.seekg(0, std::ios::end);
         auto file_size = log_file.tellg();
-        log_file.seekg(0, std::ios::beg);
         std::cout << "[SNAPSHOT] Log file size: " << file_size << " bytes" << std::endl;
+        
+        log_file.seekg(0, std::ios::beg);
+        
+        // Calculate estimated progress for large files
+        bool show_progress = (file_size > 1000000);  // Show progress for >1MB logs
+        int64_t bytes_per_percent = file_size / 100;
+        int last_percent = -1;
+        
+        // Start time for performance measurement
+        auto start_time = std::chrono::high_resolution_clock::now();
 
         std::cout << "[SNAPSHOT] Building snapshot of '" << target_table_name 
                   << "' at timestamp: " << target_time << std::endl;
+        if (show_progress) {
+            std::cout << "[SNAPSHOT] Large log file (" << (file_size / 1024 / 1024) 
+                      << " MB) - progress will be shown every 10%" << std::endl;
+        }
         std::cout << "[SNAPSHOT] This is a 'git checkout --detached' operation" << std::endl;
 
         int record_count = 0;
         int matching_records = 0;
         int total_records = 0;
+        int update_count = 0;  // Track updates separately
         LogRecord record(0, 0, LogRecordType::INVALID);
 
         while (ReadLogRecord(log_file, record)) {
             total_records++;
             
-            // Debug: Show first few records
-            if (total_records <= 10) {
+            // Progress tracking for large files
+            if (show_progress && bytes_per_percent > 0) {
+                int64_t current_pos = log_file.tellg();
+                int current_percent = static_cast<int>(current_pos / bytes_per_percent);
+                if (current_percent > last_percent && current_percent % 10 == 0) {
+                    last_percent = current_percent;
+                    std::cout << "[SNAPSHOT] Progress: " << current_percent << "% (" 
+                              << total_records << " records, " 
+                              << record_count << " applied)" << std::endl;
+                }
+            }
+            
+            // Debug: Show first few records (reduced for large files)
+            if (!show_progress && total_records <= 10) {
                 std::cout << "[SNAPSHOT] Record " << total_records 
                           << ": Type=" << LogRecordTypeToString(record.log_record_type_)
                           << ", Table='" << record.table_name_ << "'"
@@ -946,9 +972,7 @@ namespace francodb {
 
             // Stop if we've passed the target time
             if (target_time > 0 && record.timestamp_ > target_time) {
-                std::cout << "[SNAPSHOT] Stopping at record " << total_records 
-                          << " (timestamp " << record.timestamp_ 
-                          << " > target " << target_time << ")" << std::endl;
+                std::cout << "[SNAPSHOT] Reached target time at record " << total_records << std::endl;
                 break;
             }
 
@@ -1016,8 +1040,13 @@ namespace francodb {
                         RID rid;
                         target_heap->InsertTuple(t, &rid, nullptr);
                         record_count++;
-                        std::cout << "[SNAPSHOT] Applied INSERT for table '" << record.table_name_ 
-                                  << "', values: " << tuple_str << std::endl;
+                        // Only log first few inserts to avoid spam
+                        if (record_count <= 5) {
+                            std::cout << "[SNAPSHOT] Applied INSERT for table '" << record.table_name_ 
+                                      << "', values: " << tuple_str << std::endl;
+                        } else if (record_count == 6) {
+                            std::cout << "[SNAPSHOT] (further INSERT logs suppressed...)" << std::endl;
+                        }
                     }
                     break;
                 }
@@ -1109,8 +1138,14 @@ namespace francodb {
                                 Tuple new_tuple(new_vals, table_info->schema_);
                                 RID new_rid;
                                 target_heap->InsertTuple(new_tuple, &new_rid, nullptr);
-                                std::cout << "[SNAPSHOT] Applied UPDATE for table '" << record.table_name_ 
-                                          << "': " << old_str << " -> " << new_str << std::endl;
+                                update_count++;
+                                // Only log first few updates to avoid spam
+                                if (update_count <= 3) {
+                                    std::cout << "[SNAPSHOT] Applied UPDATE for table '" << record.table_name_ 
+                                              << "': " << old_str << " -> " << new_str << std::endl;
+                                } else if (update_count == 4) {
+                                    std::cout << "[SNAPSHOT] (further UPDATE logs suppressed...)" << std::endl;
+                                }
                             }
                             break;
                         }
@@ -1125,9 +1160,16 @@ namespace francodb {
         }
 
         log_file.close();
+        
+        // Report timing
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        
         std::cout << "[SNAPSHOT] Complete. Total records: " << total_records
                   << ", matching '" << target_table_name << "': " << matching_records 
-                  << ", inserted: " << record_count << std::endl;
+                  << ", inserted: " << record_count 
+                  << ", updated: " << update_count
+                  << " (elapsed: " << duration.count() << "ms)" << std::endl;
     }
 
     TableHeap* RecoveryManager::BuildTableSnapshot(const std::string& table_name, 

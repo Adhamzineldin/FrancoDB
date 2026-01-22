@@ -17,6 +17,9 @@ public:
     void Init() override;
     bool Next(Tuple *tuple) override;
     const Schema *GetOutputSchema() override;
+    
+    /** Returns the number of rows that were updated */
+    int GetUpdateCount() const { return count_; }
 
 private:
     Tuple CreateUpdatedTuple(const Tuple &old_tuple);
@@ -25,6 +28,7 @@ private:
     UpdateStatement *plan_;
     TableMetadata *table_info_;
     bool is_finished_ = false;
+    int count_ = 0;
     Transaction *txn_;
 };
 

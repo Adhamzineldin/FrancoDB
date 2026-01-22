@@ -336,11 +336,11 @@ ExecutionResult DMLExecutor::Update(UpdateStatement* stmt, Transaction* txn) {
         executor.Init();
         
         Tuple result_tuple;
-        int update_count = 0;
+        // Execute the update - all updates happen in one Next() call
+        executor.Next(&result_tuple);
         
-        while (executor.Next(&result_tuple)) {
-            update_count++;
-        }
+        // Get actual count from the executor
+        int update_count = executor.GetUpdateCount();
         
         return ExecutionResult::Message("UPDATE " + std::to_string(update_count));
         

@@ -11,6 +11,7 @@
 #include "storage/table/column.h"
 #include <iostream>
 #include <cmath>
+#include <unordered_set>
 
 namespace francodb {
 
@@ -61,8 +62,8 @@ void UpdateExecutor::Init() {
 }
 
 bool UpdateExecutor::Next(Tuple *tuple) {
-    (void)tuple;
     if (is_finished_) return false;
+    is_finished_ = true;  // We do all work in one call
 
     // Store old RID, old tuple (for index removal), and new tuple (for index insertion)
     struct UpdateInfo {
@@ -130,98 +131,130 @@ bool UpdateExecutor::Next(Tuple *tuple) {
     // 2. APPLY PHASE (Update indexes, Delete Old, Insert New)
     // NOTE: We already hold exclusive locks on all rows in updates_to_apply
     int count = 0;
+    
+    // PERFORMANCE OPTIMIZATION: Pre-check if we're updating a primary key column
+    bool updating_pk = false;
+    int pk_col_idx = -1;
+    for (uint32_t i = 0; i < table_info_->schema_.GetColumnCount(); i++) {
+        const Column &col = table_info_->schema_.GetColumn(i);
+        if (col.IsPrimaryKey() && col.GetName() == plan_->target_column_) {
+            updating_pk = true;
+            pk_col_idx = i;
+            break;
+        }
+    }
+    
+    // PERFORMANCE OPTIMIZATION: For PK updates, build a set of existing values ONCE
+    std::unordered_set<std::string> existing_pk_values;
+    if (updating_pk && pk_col_idx >= 0) {
+        // Also check that all new values are the same (bulk update to same value)
+        // In that case, we only need to check uniqueness once
+        bool all_same_new_value = true;
+        std::string first_new_val;
+        for (size_t i = 0; i < updates_to_apply.size(); i++) {
+            Value new_pk = updates_to_apply[i].new_tuple.GetValue(table_info_->schema_, pk_col_idx);
+            std::string val_str = new_pk.ToString();
+            if (i == 0) {
+                first_new_val = val_str;
+            } else if (val_str != first_new_val) {
+                all_same_new_value = false;
+                break;
+            }
+        }
+        
+        // If all new values are the same and we're updating more than 1 row,
+        // this will definitely cause a PK violation
+        if (all_same_new_value && updates_to_apply.size() > 1) {
+            throw Exception(ExceptionType::EXECUTION, 
+                "PRIMARY KEY violation: Bulk update would create " + 
+                std::to_string(updates_to_apply.size()) + " duplicate values");
+        }
+        
+        // Build set of existing PK values (excluding rows being updated)
+        std::unordered_set<page_id_t> updating_pages;
+        for (const auto& upd : updates_to_apply) {
+            updating_pages.insert(upd.old_rid.GetPageId());
+        }
+        
+        // Use index if available for faster lookup
+        auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
+        bool has_pk_index = false;
+        for (auto *index : indexes) {
+            if (index->col_name_ == table_info_->schema_.GetColumn(pk_col_idx).GetName()) {
+                has_pk_index = true;
+                break;
+            }
+        }
+        
+        if (!has_pk_index) {
+            // Only scan for existing values if no index (index will handle uniqueness)
+            page_id_t scan_page_id = table_info_->first_page_id_;
+            while (scan_page_id != INVALID_PAGE_ID) {
+                Page *page = bpm->FetchPage(scan_page_id);
+                if (page == nullptr) break;
+                auto *table_page = reinterpret_cast<TablePage *>(page->GetData());
+                
+                for (uint32_t slot = 0; slot < table_page->GetTupleCount(); slot++) {
+                    RID rid(scan_page_id, slot);
+                    // Skip rows we're updating
+                    bool is_updating = false;
+                    for (const auto& upd : updates_to_apply) {
+                        if (upd.old_rid == rid) { is_updating = true; break; }
+                    }
+                    if (is_updating) continue;
+                    
+                    Tuple existing_tuple;
+                    if (table_page->GetTuple(rid, &existing_tuple, txn_)) {
+                        Value pk_val = existing_tuple.GetValue(table_info_->schema_, pk_col_idx);
+                        existing_pk_values.insert(pk_val.ToString());
+                    }
+                }
+                
+                page_id_t next = table_page->GetNextPageId();
+                bpm->UnpinPage(scan_page_id, false);
+                scan_page_id = next;
+            }
+        }
+    }
+    
+    // Get indexes once (not per row)
+    auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
+    
+    // PERFORMANCE: Progress tracking for large updates
+    size_t total_updates = updates_to_apply.size();
+    size_t progress_interval = std::max(total_updates / 10, size_t(1000));
+    bool show_progress = (total_updates > 5000);
+    size_t updates_done = 0;
+    
+    if (show_progress) {
+        std::cout << "[UPDATE] Starting bulk update: " << total_updates << " rows" << std::endl;
+    }
+    
     for (const auto &update : updates_to_apply) {
         // Track modification for rollback (old RID with old tuple)
         if (txn_) {
             txn_->AddModifiedTuple(update.old_rid, update.old_tuple, false, plan_->table_name_);
         }
         
-        // --- CHECK PRIMARY KEY UNIQUENESS (if updating a PK column) ---
-        for (uint32_t i = 0; i < table_info_->schema_.GetColumnCount(); i++) {
-            const Column &col = table_info_->schema_.GetColumn(i);
+        // --- OPTIMIZED PRIMARY KEY UNIQUENESS CHECK ---
+        // Only check if we're updating a PK column, and use pre-built set
+        if (updating_pk && pk_col_idx >= 0) {
+            Value new_pk_value = update.new_tuple.GetValue(table_info_->schema_, pk_col_idx);
+            std::string new_pk_str = new_pk_value.ToString();
             
-            if (col.IsPrimaryKey() && col.GetName() == plan_->target_column_) {
-                Value new_pk_value = update.new_tuple.GetValue(table_info_->schema_, i);
-                bool found_duplicate = false;
-                
-                // Try to use index first (faster)
-                auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
-                bool has_index = false;
-                for (auto *index : indexes) {
-                    if (index->col_name_ == col.GetName()) {
-                        has_index = true;
-                        GenericKey<8> key;
-                        key.SetFromValue(new_pk_value);
-                        
-                        std::vector<RID> result_rids;
-                        if (index->b_plus_tree_->GetValue(key, &result_rids, txn_)) {
-                            // Check if any of the RIDs point to non-deleted tuples (excluding current)
-                            for (const RID &rid : result_rids) {
-                                if (rid == update.old_rid) continue; // Skip current tuple
-                                Tuple existing_tuple;
-                                if (table_info_->table_heap_->GetTuple(rid, &existing_tuple, txn_)) {
-                                    found_duplicate = true;
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-                
-                // Fallback: Sequential scan if no index exists
-                if (!has_index) {
-                    page_id_t scan_page_id = table_info_->first_page_id_;
-                    while (scan_page_id != INVALID_PAGE_ID && !found_duplicate) {
-                        Page *page = bpm->FetchPage(scan_page_id);
-                        if (page == nullptr) {
-                            break; // Skip if page fetch fails
-                        }
-                        auto *table_page = reinterpret_cast<TablePage *>(page->GetData());
-                        
-                        for (uint32_t slot = 0; slot < table_page->GetTupleCount(); slot++) {
-                            RID rid(scan_page_id, slot);
-                            if (rid == update.old_rid) continue; // Skip the tuple we're updating
-                            
-                            Tuple existing_tuple;
-                            if (table_page->GetTuple(rid, &existing_tuple, txn_)) {
-                                Value existing_pk = existing_tuple.GetValue(table_info_->schema_, i);
-                                // Compare values based on type
-                                bool matches = false;
-                                if (existing_pk.GetTypeId() == new_pk_value.GetTypeId()) {
-                                    if (existing_pk.GetTypeId() == TypeId::INTEGER) {
-                                        matches = (existing_pk.GetAsInteger() == new_pk_value.GetAsInteger());
-                                    } else if (existing_pk.GetTypeId() == TypeId::DECIMAL) {
-                                        matches = (std::abs(existing_pk.GetAsDouble() - new_pk_value.GetAsDouble()) < 0.0001);
-                                    } else if (existing_pk.GetTypeId() == TypeId::VARCHAR) {
-                                        matches = (existing_pk.GetAsString() == new_pk_value.GetAsString());
-                                    } else {
-                                        matches = (existing_pk.GetAsInteger() == new_pk_value.GetAsInteger());
-                                    }
-                                }
-                                if (matches) {
-                                    found_duplicate = true;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        page_id_t next = table_page->GetNextPageId();
-                        bpm->UnpinPage(scan_page_id, false);
-                        scan_page_id = next;
-                    }
-                }
-                
-                if (found_duplicate) {
-                    throw Exception(ExceptionType::EXECUTION, 
-                        "PRIMARY KEY violation: Duplicate value for " + col.GetName());
-                }
+            // Check against pre-built set (O(1) lookup instead of O(n) scan)
+            if (existing_pk_values.find(new_pk_str) != existing_pk_values.end()) {
+                throw Exception(ExceptionType::EXECUTION, 
+                    "PRIMARY KEY violation: Duplicate value for " + 
+                    table_info_->schema_.GetColumn(pk_col_idx).GetName());
             }
+            
+            // Add the new value to the set (for detecting duplicates within the batch)
+            existing_pk_values.insert(new_pk_str);
         }
         // -----------------------------------------------------------------
         
         // A. Remove old tuple from indexes
-        auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
         for (auto *index : indexes) {
             int col_idx = table_info_->schema_.GetColIdx(index->col_name_);
             Value old_key_val = update.old_tuple.GetValue(table_info_->schema_, col_idx);
@@ -284,11 +317,21 @@ bool UpdateExecutor::Next(Tuple *tuple) {
         }
         
         count++;
+        updates_done++;
+        
+        // Progress reporting for large bulk updates
+        if (show_progress && updates_done % progress_interval == 0) {
+            int pct = static_cast<int>((updates_done * 100) / total_updates);
+            std::cout << "[UPDATE] Progress: " << pct << "% (" << updates_done << "/" << total_updates << ")" << std::endl;
+        }
     }
-    (void) count;
-    // Logging removed to avoid interleaved output during concurrent operations
-    is_finished_ = true;
-    return false;
+    
+    if (show_progress) {
+        std::cout << "[UPDATE] Bulk update complete: " << count << " rows updated" << std::endl;
+    }
+    
+    count_ = count;  // Store count for GetUpdateCount()
+    return false;    // All work done in this single call
 }
 
 const Schema *UpdateExecutor::GetOutputSchema() {
