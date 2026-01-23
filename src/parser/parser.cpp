@@ -695,26 +695,20 @@ namespace francodb {
             }
         }
         
-        // Check for "AS OF"
-        if (current_token_.text == "AS") {
-            Advance(); // Eat AS
-    
-            if (current_token_.text == "OF") {
-                Advance(); // Eat OF
-        
-                // Parse the Timestamp
-                if (current_token_.type == TokenType::STRING_LIT) {
-                    stmt->as_of_timestamp_ = ParseHumanDateToMicros(current_token_.text);
-                    Advance();
-                } else if (current_token_.type == TokenType::NUMBER) {
-                    stmt->as_of_timestamp_ = std::stoull(current_token_.text);
-                    Advance();
-                } else {
-                    throw Exception(ExceptionType::PARSER, "Expected Timestamp (String or Number) after AS OF");
-                }
-        
-            } else {
+        // Check for AS OF (token-based, so case-insensitive)
+        if (Match(TokenType::AS)) {
+            if (!Match(TokenType::OF)) {
                 throw Exception(ExceptionType::PARSER, "Expected OF after AS");
+            }
+
+            if (current_token_.type == TokenType::STRING_LIT) {
+                stmt->as_of_timestamp_ = ParseHumanDateToMicros(current_token_.text);
+                Advance();
+            } else if (current_token_.type == TokenType::NUMBER) {
+                stmt->as_of_timestamp_ = std::stoull(current_token_.text);
+                Advance();
+            } else {
+                throw Exception(ExceptionType::PARSER, "Expected Timestamp (String or Number) after AS OF");
             }
         }
 

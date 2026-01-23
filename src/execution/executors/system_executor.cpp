@@ -73,12 +73,26 @@ ExecutionResult SystemExecutor::ShowTables(ShowTablesStatement* stmt, SessionCon
     auto rs = std::make_shared<ResultSet>();
     rs->column_names = {"Tables_in_" + session->current_db};
 
-    if (!catalog_) {
-        return ExecutionResult::Error("No catalog available");
+    // Resolve catalog for the currently selected database
+    Catalog* cat = nullptr;
+    if (db_registry_) {
+        if (auto entry = db_registry_->Get(session->current_db)) {
+            cat = entry->catalog.get();
+        }
+        if (!cat) {
+            cat = db_registry_->ExternalCatalog(session->current_db);
+        }
+    }
+    if (!cat) {
+        // Fallback to injected catalog (e.g., single-DB mode)
+        cat = catalog_;
+    }
+    if (!cat) {
+        return ExecutionResult::Error("No catalog available for current database");
     }
 
     try {
-        std::vector<std::string> table_names = catalog_->GetAllTableNames();
+        std::vector<std::string> table_names = cat->GetAllTableNames();
         std::sort(table_names.begin(), table_names.end());
 
         for (const auto& name : table_names) {
