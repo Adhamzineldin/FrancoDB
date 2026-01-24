@@ -60,14 +60,9 @@ End Function
 Sub StopFrancoDB()
     Dim blnGracefulStop
     
-    WScript.Echo "FrancoDB Server Stop Script"
-    WScript.Echo "========================================"
-    WScript.Echo ""
-    
     blnGracefulStop = False
     
     ' Step 1: Try to stop the service gracefully
-    WScript.Echo "[INFO] Attempting graceful service stop..."
     intReturnCode = objShell.Run("cmd /c sc stop " & strServiceName, 0, True)
     
     if intReturnCode = 0 or intReturnCode = 1062 then ' 1062 = already stopped
@@ -77,7 +72,6 @@ Sub StopFrancoDB()
             WScript.Sleep 1000
             intState = GetServiceState(strServiceName)
             if intState = 1 or intState = -1 then
-                WScript.Echo "[OK] Service stopped gracefully"
                 blnGracefulStop = True
                 Exit Do
             end if
@@ -88,27 +82,12 @@ Sub StopFrancoDB()
         Loop
     end if
     
-    ' Step 2: Check if processes are still running
+    ' Step 2: Check if processes are still running and force kill if needed
     if IsProcessRunning("francodb_server.exe") or IsProcessRunning("francodb_service.exe") then
-        if not blnGracefulStop then
-            WScript.Echo "[WARN] Service did not stop gracefully. Force killing..."
-        else
-            WScript.Echo "[WARN] Process still in memory. Cleaning up..."
-        end if
-        
-        ' Force kill
+        ' Force kill silently
         objShell.Run "cmd /c taskkill /F /IM francodb_service.exe 2>nul", 0, True
         objShell.Run "cmd /c taskkill /F /IM francodb_server.exe 2>nul", 0, True
-        
         WScript.Sleep 1000
-        
-        if not (IsProcessRunning("francodb_server.exe") or IsProcessRunning("francodb_service.exe")) then
-            WScript.Echo "[OK] Processes terminated"
-        else
-            WScript.Echo "[ERROR] Could not terminate processes"
-        end if
-    else
-        WScript.Echo "[OK] All FrancoDB processes are stopped"
     end if
     
 End Sub
@@ -116,9 +95,7 @@ End Sub
 ' ==============================================================================
 ' RUN THE SCRIPT
 ' ==============================================================================
+' Silent operation - no popup windows
 StopFrancoDB()
 
-WScript.Echo ""
-WScript.Echo "========================================"
-WScript.Echo "Script completed."
 
