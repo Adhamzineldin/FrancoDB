@@ -467,7 +467,11 @@ namespace francodb {
         static uint64_t ParseISODateTime(const std::string& str) {
             struct tm tm_info = {};
             int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-            if (sscanf(str.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second) >= 3) {
+            int parsed = 0;
+            
+            // Try format: YYYY-MM-DD HH:MM:SS (ISO format)
+            parsed = sscanf(str.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+            if (parsed >= 3 && year > 1900) {
                 tm_info.tm_year = year - 1900;
                 tm_info.tm_mon = month - 1;
                 tm_info.tm_mday = day;
@@ -477,6 +481,36 @@ namespace francodb {
                 time_t epoch = mktime(&tm_info);
                 return static_cast<uint64_t>(epoch) * 1000000ULL;
             }
+            
+            // Try format: DD/MM/YYYY HH:MM:SS (European format)
+            parsed = sscanf(str.c_str(), "%d/%d/%d %d:%d:%d", &day, &month, &year, &hour, &minute, &second);
+            if (parsed >= 3) {
+                tm_info.tm_year = year - 1900;
+                tm_info.tm_mon = month - 1;
+                tm_info.tm_mday = day;
+                tm_info.tm_hour = hour;
+                tm_info.tm_min = minute;
+                tm_info.tm_sec = second;
+                time_t epoch = mktime(&tm_info);
+                std::cout << "[SnapshotManager] Parsed timestamp: " << day << "/" << month << "/" << year
+                          << " " << hour << ":" << minute << ":" << second << std::endl;
+                return static_cast<uint64_t>(epoch) * 1000000ULL;
+            }
+            
+            // Try format: MM/DD/YYYY HH:MM:SS (US format)
+            parsed = sscanf(str.c_str(), "%d/%d/%d %d:%d:%d", &month, &day, &year, &hour, &minute, &second);
+            if (parsed >= 3 && month <= 12) {
+                tm_info.tm_year = year - 1900;
+                tm_info.tm_mon = month - 1;
+                tm_info.tm_mday = day;
+                tm_info.tm_hour = hour;
+                tm_info.tm_min = minute;
+                tm_info.tm_sec = second;
+                time_t epoch = mktime(&tm_info);
+                return static_cast<uint64_t>(epoch) * 1000000ULL;
+            }
+            
+            std::cerr << "[SnapshotManager] Failed to parse timestamp: " << str << std::endl;
             return LogRecord::GetCurrentTimestamp();
         }
     };

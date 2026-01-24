@@ -1110,14 +1110,22 @@ namespace francodb {
         std::tm tm = {};
         std::istringstream ss(date_str);
         
-        // Parse format: 21/01/2026 14:30
-        ss >> std::get_time(&tm, "%d/%m/%Y %H:%M");
+        // Try format with seconds first: DD/MM/YYYY HH:MM:SS
+        ss >> std::get_time(&tm, "%d/%m/%Y %H:%M:%S");
         
         if (ss.fail()) {
-            throw Exception(ExceptionType::PARSER, "Invalid date. Use: 'DD/MM/YYYY HH:MM'");
+            // Reset and try without seconds: DD/MM/YYYY HH:MM
+            ss.clear();
+            ss.str(date_str);
+            tm = {};
+            ss >> std::get_time(&tm, "%d/%m/%Y %H:%M");
+            
+            if (ss.fail()) {
+                throw Exception(ExceptionType::PARSER, "Invalid date. Use: 'DD/MM/YYYY HH:MM' or 'DD/MM/YYYY HH:MM:SS'");
+            }
+            tm.tm_sec = 0;  // No seconds provided
         }
 
-        tm.tm_sec = 0; 
         tm.tm_isdst = -1; // Let system determine DST
         
         std::time_t t = std::mktime(&tm);

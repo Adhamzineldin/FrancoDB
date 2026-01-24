@@ -194,6 +194,23 @@ namespace francodb {
                            uint64_t target_time,
                            const std::string& db_name = "");
 
+        /**
+         * Replay log records from a specific LSN into a heap (delta replay).
+         * This is the checkpoint-optimized version for RECOVER TO.
+         * 
+         * @param target_heap The heap to populate (should already have checkpoint data)
+         * @param target_table_name Table name to filter records
+         * @param start_lsn Start replaying from this LSN (exclusive)
+         * @param target_time Stop replaying at this timestamp
+         * @param db_name Database to read logs from
+         * @return Number of records replayed
+         */
+        int ReplayDeltaIntoHeap(TableHeap* target_heap,
+                                const std::string& target_table_name,
+                                LogRecord::lsn_t start_lsn,
+                                uint64_t target_time,
+                                const std::string& db_name);
+
         // ========================================================================
         // STATISTICS AND MONITORING
         // ========================================================================

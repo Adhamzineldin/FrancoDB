@@ -997,14 +997,13 @@ namespace francodb {
         std::cout << "[RECOVER_TO] Current database: " << db_name << std::endl;
         
         // Special case: target_time = 0 or target_time = UINT64_MAX means "recover to latest"
-        // Also allow up to 1 minute in the future to handle "recover to now"
         uint64_t current_time = LogRecord::GetCurrentTimestamp();
         bool recover_to_latest = (target_time == 0) || 
                                  (target_time == UINT64_MAX) ||
                                  (target_time >= current_time);
         
         if (recover_to_latest) {
-            target_time = UINT64_MAX;  // Replay ALL records
+            target_time = UINT64_MAX;
             std::cout << "[RECOVER_TO] Recovering to LATEST state (all log records)" << std::endl;
         }
         
@@ -1030,9 +1029,48 @@ namespace francodb {
             
             std::cout << "[RECOVER_TO] Rebuilding table: " << table_name << std::endl;
             
-            // Step 1: Build a snapshot of what the table SHOULD look like at target_time
-            auto snapshot_heap = std::make_unique<TableHeap>(bpm_, nullptr);
-            ReplayIntoHeap(snapshot_heap.get(), table_name, target_time, db_name);
+            // ================================================================
+            // CHECKPOINT-BASED OPTIMIZATION (Bug #6 fix for RECOVER TO)
+            // Instead of replaying from LSN 0, use checkpoint as base
+            // ================================================================
+            
+            LogRecord::lsn_t checkpoint_lsn = table_info->GetCheckpointLSN();
+            uint64_t checkpoint_time = 0;
+            
+            // Get checkpoint timestamp
+            if (checkpoint_lsn != LogRecord::INVALID_LSN && checkpoint_mgr_ != nullptr) {
+                checkpoint_time = checkpoint_mgr_->GetLastCheckpointTimestamp();
+            }
+            
+            std::unique_ptr<TableHeap> snapshot_heap;
+            
+            if (checkpoint_lsn != LogRecord::INVALID_LSN && target_time >= checkpoint_time) {
+                // TARGET IS AFTER CHECKPOINT: Use checkpoint + delta (fast path)
+                std::cout << "[RECOVER_TO]   Using CHECKPOINT at LSN " << checkpoint_lsn << std::endl;
+                
+                // Clone the live table (which is at checkpoint state)
+                snapshot_heap = std::make_unique<TableHeap>(bpm_, nullptr);
+                auto iter = table_info->table_heap_->Begin(nullptr);
+                int clone_count = 0;
+                while (iter != table_info->table_heap_->End()) {
+                    Tuple tuple = *iter;
+                    RID rid;
+                    snapshot_heap->InsertTuple(tuple, &rid, nullptr);
+                    ++iter;
+                    clone_count++;
+                }
+                std::cout << "[RECOVER_TO]   Cloned " << clone_count << " tuples from checkpoint" << std::endl;
+                
+                // Replay only delta from checkpoint to target_time
+                int delta_count = ReplayDeltaIntoHeap(snapshot_heap.get(), table_name, 
+                                                       checkpoint_lsn, target_time, db_name);
+                std::cout << "[RECOVER_TO]   Replayed " << delta_count << " delta records" << std::endl;
+            } else {
+                // TARGET IS BEFORE CHECKPOINT: Must replay from LSN 0 (slow path)
+                std::cout << "[RECOVER_TO]   Target before checkpoint, replaying from LSN 0" << std::endl;
+                snapshot_heap = std::make_unique<TableHeap>(bpm_, nullptr);
+                ReplayIntoHeap(snapshot_heap.get(), table_name, target_time, db_name);
+            }
             
             // Count tuples in snapshot
             int snapshot_count = 0;
@@ -1100,11 +1138,21 @@ namespace francodb {
                 snap_page_id = next_page;
             }
             
+            // Update the table's checkpoint LSN to reflect current state
+            // (The table is now at target_time, but we need a new checkpoint)
+            table_info->SetCheckpointLSN(LogRecord::INVALID_LSN);
+            
             std::cout << "[RECOVER_TO] Restored " << restored_count << " tuples for table: " << table_name << std::endl;
         }
         
         // Flush changes to disk
         bpm_->FlushAllPages();
+        
+        // Take a checkpoint after recovery to establish new baseline
+        if (checkpoint_mgr_ != nullptr) {
+            std::cout << "[RECOVER_TO] Taking checkpoint after recovery..." << std::endl;
+            checkpoint_mgr_->BeginCheckpoint();
+        }
         
         std::cout << "[RECOVER_TO] Time travel complete." << std::endl;
     }
@@ -1445,6 +1493,114 @@ namespace francodb {
         ReplayIntoHeap(snapshot_heap, table_name, target_time);
         
         return snapshot_heap;
+    }
+
+    // ========================================================================
+    // DELTA REPLAY (Checkpoint-based optimization for RECOVER TO)
+    // ========================================================================
+
+    int RecoveryManager::ReplayDeltaIntoHeap(TableHeap* target_heap,
+                                              const std::string& target_table_name,
+                                              LogRecord::lsn_t start_lsn,
+                                              uint64_t target_time,
+                                              const std::string& db_name) {
+        if (!target_heap || !log_manager_) return 0;
+        
+        std::string log_path = log_manager_->GetLogFilePath(db_name);
+        std::ifstream log_file(log_path, std::ios::binary | std::ios::in);
+        
+        if (!log_file.is_open()) {
+            std::cerr << "[DELTA] Cannot open log file: " << log_path << std::endl;
+            return 0;
+        }
+        
+        auto table_info = catalog_->GetTable(target_table_name);
+        if (!table_info) {
+            std::cerr << "[DELTA] Table not found: " << target_table_name << std::endl;
+            return 0;
+        }
+        
+        int delta_count = 0;
+        LogRecord record(0, 0, LogRecordType::INVALID);
+        
+        // Helper to parse tuple values
+        auto parseTupleString = [&](const std::string& tuple_str) -> std::vector<Value> {
+            return ParseTupleStringSafe(tuple_str, table_info);
+        };
+        
+        auto tuplesMatch = [&](const Tuple& tuple, const std::vector<Value>& vals) -> bool {
+            if (vals.size() != table_info->schema_.GetColumnCount()) return false;
+            for (uint32_t i = 0; i < vals.size(); i++) {
+                if (tuple.GetValue(table_info->schema_, i).ToString() != vals[i].ToString()) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        
+        while (ReadLogRecord(log_file, record)) {
+            // Skip records at or before start LSN
+            if (record.lsn_ <= start_lsn) continue;
+            
+            // Stop if past target time
+            if (target_time > 0 && target_time != UINT64_MAX && record.timestamp_ > target_time) break;
+            
+            // Only process records for this table
+            if (record.table_name_ != target_table_name) continue;
+            
+            // Apply the delta operation
+            switch (record.log_record_type_) {
+                case LogRecordType::INSERT: {
+                    auto vals = parseTupleString(record.new_value_.ToString());
+                    if (vals.size() == table_info->schema_.GetColumnCount()) {
+                        Tuple tuple(vals, table_info->schema_);
+                        RID rid;
+                        target_heap->InsertTuple(tuple, &rid, nullptr);
+                        delta_count++;
+                    }
+                    break;
+                }
+                case LogRecordType::UPDATE: {
+                    auto old_vals = parseTupleString(record.old_value_.ToString());
+                    auto new_vals = parseTupleString(record.new_value_.ToString());
+                    
+                    auto iter = target_heap->Begin(nullptr);
+                    while (iter != target_heap->End()) {
+                        if (tuplesMatch(*iter, old_vals)) {
+                            target_heap->MarkDelete(iter.GetRID(), nullptr);
+                            if (new_vals.size() == table_info->schema_.GetColumnCount()) {
+                                Tuple new_tuple(new_vals, table_info->schema_);
+                                RID rid;
+                                target_heap->InsertTuple(new_tuple, &rid, nullptr);
+                            }
+                            delta_count++;
+                            break;
+                        }
+                        ++iter;
+                    }
+                    break;
+                }
+                case LogRecordType::MARK_DELETE:
+                case LogRecordType::APPLY_DELETE: {
+                    auto old_vals = parseTupleString(record.old_value_.ToString());
+                    auto iter = target_heap->Begin(nullptr);
+                    while (iter != target_heap->End()) {
+                        if (tuplesMatch(*iter, old_vals)) {
+                            target_heap->MarkDelete(iter.GetRID(), nullptr);
+                            delta_count++;
+                            break;
+                        }
+                        ++iter;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        
+        log_file.close();
+        return delta_count;
     }
 
     // ========================================================================
