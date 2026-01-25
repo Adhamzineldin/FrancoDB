@@ -1,3 +1,4 @@
+#define NOMINMAX  // Prevent Windows.h min/max macros from conflicting with std::min/max
 #include <windows.h>
 #include <tchar.h>
 #include <iostream>
@@ -123,9 +124,9 @@ void StopServerProcess() {
             return;
         }
         
-        elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        elapsed = static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startTime
-        ).count();
+        ).count());
         
         if (elapsed % 10000 < waitTime) {
             LogDebug("Still waiting for graceful shutdown... (" + std::to_string(elapsed / 1000) + "s / " + std::to_string(GRACEFUL_SHUTDOWN_TIMEOUT_MS / 1000) + "s)");
