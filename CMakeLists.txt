@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.10)
 project(FrancoDB)
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter")
 
 set(SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 set(TEST_DIR "${CMAKE_SOURCE_DIR}/test")
@@ -16,6 +15,13 @@ file(GLOB_RECURSE FRANCODB_HEADERS CONFIGURE_DEPENDS "${SRC_DIR}/include/*.h")
 list(FILTER FRANCODB_SOURCES EXCLUDE REGEX ".*/src/cmd/.*")
 
 add_library(francodb_lib ${FRANCODB_SOURCES} ${FRANCODB_HEADERS})
+# Add compiler-appropriate warning flags per target
+if(MSVC)
+    target_compile_options(francodb_lib PRIVATE /W4)
+else()
+    target_compile_options(francodb_lib PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
 target_include_directories(francodb_lib PUBLIC "${SRC_DIR}/include")
 
 # =========================================================
