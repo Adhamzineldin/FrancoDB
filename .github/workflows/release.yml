@@ -55,24 +55,34 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path cmake-build-release\Release
           Copy-Item -Path build\Release\* -Destination cmake-build-release\Release\ -Recurse -Force
+          Write-Host "Copied binaries to cmake-build-release\Release\"
         shell: pwsh
 
       - name: Build Windows installer
         run: |
           Write-Host "Checking for required files..."
           Get-ChildItem cmake-build-release\Release
-          Write-Host "`nBuilding installer..."
+          Write-Host "`nVerifying Inno Setup installation..."
           $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $isccPath)) {
             Write-Host "ERROR: Inno Setup not found at $isccPath"
+            Write-Host "Searching for ISCC.exe..."
+            Get-ChildItem "C:\Program Files (x86)\" -Recurse -Filter "ISCC.exe" -ErrorAction SilentlyContinue
             exit 1
           }
-          & $isccPath installers/windows/installer.iss
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: Inno Setup compilation failed with exit code $LASTEXITCODE"
-            exit $LASTEXITCODE
+          Write-Host "Found ISCC at: $isccPath"
+          Write-Host "`nBuilding installer with Inno Setup..."
+          & $isccPath /Q installers/windows/installer.iss 2>&1 | Tee-Object -Variable output
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -ne 0) {
+            Write-Host "ERROR: Inno Setup compilation failed with exit code $exitCode"
+            Write-Host "`nChecking if output was created anyway..."
+            Get-ChildItem installers/windows/Output -ErrorAction SilentlyContinue
+            exit $exitCode
           }
           Write-Host "`nInstaller built successfully!"
+          Write-Host "Output files:"
           Get-ChildItem installers/windows/Output
         shell: pwsh
 
