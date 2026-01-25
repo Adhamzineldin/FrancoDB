@@ -47,14 +47,20 @@ jobs:
 
       - name: Build project (Release)
         run: |
-          cmake -S . -B cmake-build-release -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-          cmake --build cmake-build-release --config Release
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build build --config Release
+        shell: pwsh
+
+      - name: Copy binaries to expected installer location
+        run: |
+          New-Item -ItemType Directory -Force -Path cmake-build-release\Release
+          Copy-Item -Path build\Release\* -Destination cmake-build-release\Release\ -Recurse -Force
         shell: pwsh
 
       - name: Build Windows installer
         run: |
           Write-Host "Checking for required files..."
-          Get-ChildItem cmake-build-release\Release -ErrorAction SilentlyContinue
+          Get-ChildItem cmake-build-release\Release
           Write-Host "`nBuilding installer..."
           $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $isccPath)) {
@@ -67,7 +73,7 @@ jobs:
             exit $LASTEXITCODE
           }
           Write-Host "`nInstaller built successfully!"
-          Get-ChildItem installers/windows/Output -ErrorAction SilentlyContinue
+          Get-ChildItem installers/windows/Output
         shell: pwsh
 
       - name: Upload installer artifact
