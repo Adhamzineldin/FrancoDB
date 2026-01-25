@@ -20,10 +20,8 @@ jobs:
 
       - name: Build project (Release)
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-          # The part after '--' tells Windows to ignore warnings
-          cmake --build build --config Release -- /p:TreatWarningsAsErrors="false" /p:WarningLevel=0
-        shell: pwsh
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build build --config Release -- -j 4
         
       - name: Build .deb package
         run: |
@@ -50,20 +48,22 @@ jobs:
       - name: Build project (Release)
         run: |
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-          # The part after '--' tells Windows to ignore warnings
-          cmake --build build --config Release -- /p:TreatWarningsAsErrors="false" /p:WarningLevel=0
+          cmake --build build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         shell: pwsh
 
       - name: Copy binaries to expected installer location
         run: |
-          New-Item -ItemType Directory -Force -Path cmake-build-release\Release
-          Copy-Item -Path build\Release\* -Destination cmake-build-release\Release\ -Recurse -Force
+          New-Item -ItemType Directory -Force -Path cmake-build-release
+          Copy-Item -Path build\Release\* -Destination cmake-build-release\ -Recurse -Force
+          Write-Host "Files copied:"
+          Get-ChildItem cmake-build-release
         shell: pwsh
 
       - name: Build Windows installer
         run: |
           Write-Host "Checking for required files..."
-          Get-ChildItem cmake-build-release\Release
+          Get-ChildItem cmake-build-release
           Write-Host "`nBuilding installer..."
           $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $isccPath)) {
