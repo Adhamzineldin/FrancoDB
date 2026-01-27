@@ -2,7 +2,6 @@
 
 #include "storage/storage_interface.h"  // For IBufferManager
 #include "recovery/log_manager.h"
-#include "recovery/checkpoint_index.h"
 #include <mutex>
 #include <iostream>
 #include <fstream>
@@ -10,7 +9,6 @@
 #include <thread>
 #include <atomic>
 #include <condition_variable>
-#include <memory>
 
 namespace chronosdb {
 
@@ -283,37 +281,12 @@ namespace chronosdb {
         // Operation-based checkpointing (Bug #6 optimization)
         std::atomic<uint32_t> ops_since_checkpoint_{0};
         uint32_t ops_checkpoint_threshold_{1000};  // Default: checkpoint every 1k ops
-
-        // Checkpoint index for O(log K) time-travel optimization
-        std::unique_ptr<CheckpointIndex> checkpoint_index_;
-        std::string checkpoint_index_path_;
-
+        
     public:
         /**
          * Set the catalog for updating table checkpoint LSNs
          */
         void SetCatalog(Catalog* catalog) { catalog_ = catalog; }
-
-        /**
-         * Get the checkpoint index for time-travel optimization.
-         * Returns nullptr if index is not initialized.
-         */
-        CheckpointIndex* GetCheckpointIndex() const {
-            return checkpoint_index_.get();
-        }
-
-        /**
-         * Initialize the checkpoint index.
-         * Call this after the log manager is ready.
-         *
-         * @param db_name Database name for log file path
-         */
-        void InitializeCheckpointIndex(const std::string& db_name);
-
-        /**
-         * Save the checkpoint index to disk.
-         */
-        void SaveCheckpointIndex();
     };
 
 } // namespace chronosdb

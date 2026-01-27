@@ -109,20 +109,7 @@ namespace chronosdb {
             std::cout << "[CHECKPOINT] WARNING: No catalog set - table checkpoint LSNs NOT updated!" << std::endl;
         }
 
-        // 11. Update checkpoint index for time-travel optimization
-        if (checkpoint_index_) {
-            // Get the offset AFTER the CHECKPOINT_END record (where replay should start)
-            std::streampos end_offset = log_manager_->GetCurrentOffset();
-            checkpoint_index_->AddCheckpoint(checkpoint_lsn, checkpoint_timestamp, end_offset);
-
-            // Save index periodically (every 5 checkpoints)
-            if ((checkpoint_count_.load() + 1) % 5 == 0) {
-                std::cout << "[CHECKPOINT] Saving checkpoint index..." << std::endl;
-                SaveCheckpointIndex();
-            }
-        }
-
-        // 12. Update statistics
+        // 11. Update statistics
         checkpoint_count_++;
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -321,11 +308,11 @@ namespace chronosdb {
 
     std::vector<DirtyPageEntry> CheckpointManager::CollectDirtyPages() {
         std::vector<DirtyPageEntry> dirty_pages;
-
+        
         // In a production system, the BufferPoolManager would expose a method
         // to get the dirty page list. For now, we return an empty list.
         // The actual dirty pages are flushed by FlushAllPages() anyway.
-
+        
         // TODO: When BPM exposes GetDirtyPages(), use it:
         // if (bpm_ != nullptr) {
         //     auto pages = bpm_->GetDirtyPages();
@@ -338,44 +325,6 @@ namespace chronosdb {
         // }
 
         return dirty_pages;
-    }
-
-    // ========================================================================
-    // CHECKPOINT INDEX FOR TIME-TRAVEL OPTIMIZATION
-    // ========================================================================
-
-    void CheckpointManager::InitializeCheckpointIndex(const std::string& db_name) {
-        checkpoint_index_ = std::make_unique<CheckpointIndex>();
-
-        // Determine paths
-        std::filesystem::path master_path(master_record_path_);
-        checkpoint_index_path_ = (master_path.parent_path() / "checkpoint_index.bin").string();
-
-        // Try to load existing index
-        if (checkpoint_index_->LoadFromFile(checkpoint_index_path_)) {
-            std::cout << "[CheckpointManager] Loaded checkpoint index with "
-                      << checkpoint_index_->Size() << " entries" << std::endl;
-            return;
-        }
-
-        // Index doesn't exist or is corrupted - build from log
-        if (log_manager_ != nullptr) {
-            std::string log_path = log_manager_->GetLogFilePath(db_name);
-            if (std::filesystem::exists(log_path)) {
-                std::cout << "[CheckpointManager] Building checkpoint index from log..." << std::endl;
-                size_t count = checkpoint_index_->BuildFromLog(log_path);
-                if (count > 0) {
-                    // Save for next time
-                    checkpoint_index_->SaveToFile(checkpoint_index_path_);
-                }
-            }
-        }
-    }
-
-    void CheckpointManager::SaveCheckpointIndex() {
-        if (checkpoint_index_ && !checkpoint_index_path_.empty()) {
-            checkpoint_index_->SaveToFile(checkpoint_index_path_);
-        }
     }
 
 } // namespace chronosdb

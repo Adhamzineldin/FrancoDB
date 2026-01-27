@@ -1,5 +1,4 @@
 #include "recovery/recovery_manager.h"
-#include "recovery/checkpoint_index.h"
 #include "common/crc32.h"
 #include <iostream>
 #include <fstream>
@@ -9,7 +8,7 @@
 #include <filesystem>
 #include "storage/table/table_heap.h"
 #include "catalog/catalog.h"
-#include "common/type.h"
+#include "common/type.h" 
 #include "common/value.h"
 
 namespace chronosdb {
@@ -699,12 +698,7 @@ namespace chronosdb {
         // ARIES PageLSN Idempotency Check:
         // Skip redo if the page has already been updated past this record's LSN.
         // This prevents double-applying changes during recovery.
-
-        // Guard against null catalog (can happen in unit tests)
-        if (catalog_ == nullptr) {
-            return;
-        }
-
+        
         auto table_info = catalog_->GetTable(record.table_name_);
         
         // For data modification operations, check if we should skip based on page LSN
@@ -862,11 +856,6 @@ namespace chronosdb {
     }
 
     LogRecord::lsn_t RecoveryManager::UndoLogRecord(const LogRecord& record) {
-        // Guard against null catalog (can happen in unit tests)
-        if (catalog_ == nullptr) {
-            return record.prev_lsn_;
-        }
-
         auto table_info = catalog_->GetTable(record.table_name_);
         if (!table_info) {
             std::cerr << "[UNDO] Table not found: " << record.table_name_ << std::endl;
@@ -1060,48 +1049,27 @@ namespace chronosdb {
             // Instead of replaying from LSN 0, use checkpoint as base
             // ================================================================
             
+            LogRecord::lsn_t checkpoint_lsn = table_info->GetCheckpointLSN();
+            uint64_t checkpoint_time = 0;
+            
+            // Get checkpoint timestamp
+            if (checkpoint_lsn != LogRecord::INVALID_LSN && checkpoint_mgr_ != nullptr) {
+                checkpoint_time = checkpoint_mgr_->GetLastCheckpointTimestamp();
+            }
+            
             std::unique_ptr<TableHeap> snapshot_heap;
-
+            
             // ================================================================
-            // CHECKPOINT INDEX OPTIMIZATION (O(log K) + O(D) instead of O(N))
-            //
-            // Use the checkpoint index to find the nearest checkpoint BEFORE
-            // target_time, then replay only from that offset.
+            // ALWAYS use full replay for correctness
+            // The checkpoint optimization was incorrectly cloning the LIVE table
+            // which contains operations AFTER the checkpoint, causing corruption.
+            // 
+            // TODO: Implement proper checkpoint snapshots for optimization
             // ================================================================
-
+            
+            std::cout << "[RECOVER_TO]   Replaying from LSN 0 to target time" << std::endl;
             snapshot_heap = std::make_unique<TableHeap>(bpm_, nullptr);
-            bool used_optimization = false;
-
-            if (checkpoint_mgr_ != nullptr) {
-                CheckpointIndex* checkpoint_index = checkpoint_mgr_->GetCheckpointIndex();
-
-                if (checkpoint_index != nullptr) {
-                    const CheckpointEntry* nearest = checkpoint_index->FindNearestBefore(target_time);
-
-                    if (nearest != nullptr && nearest->timestamp > 0) {
-                        // Found a checkpoint before target_time - use optimized path
-                        std::cout << "[RECOVER_TO]   OPTIMIZATION: Using checkpoint at timestamp "
-                                  << nearest->timestamp << " (LSN " << nearest->lsn
-                                  << ", offset " << nearest->log_offset << ")" << std::endl;
-
-                        ReplayIntoHeapFromOffset(
-                            snapshot_heap.get(),
-                            table_name,
-                            nearest->log_offset,  // Start from checkpoint position
-                            target_time,          // Stop at target
-                            db_name
-                        );
-
-                        used_optimization = true;
-                    }
-                }
-            }
-
-            if (!used_optimization) {
-                // Fallback: Full replay from beginning
-                std::cout << "[RECOVER_TO]   Replaying from LSN 0 to target time" << std::endl;
-                ReplayIntoHeap(snapshot_heap.get(), table_name, target_time, db_name);
-            }
+            ReplayIntoHeap(snapshot_heap.get(), table_name, target_time, db_name);
             
             // Count tuples in snapshot
             int snapshot_count = 0;

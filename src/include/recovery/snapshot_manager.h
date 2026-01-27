@@ -3,7 +3,6 @@
 #include "recovery/recovery_manager.h"
 #include "recovery/log_manager.h"
 #include "recovery/checkpoint_manager.h"
-#include "recovery/checkpoint_index.h"
 #include "storage/table/table_heap.h"
 #include "catalog/catalog.h"
 #include "catalog/table_metadata.h"
@@ -48,27 +47,22 @@ namespace chronosdb {
     public:
         /**
          * Build a snapshot using checkpoint-based optimization.
-         *
+         * 
          * Algorithm:
-         * 1. Find nearest checkpoint BEFORE target_time using CheckpointIndex
-         * 2. If found, use ReplayIntoHeapFromOffset to skip to checkpoint
-         * 3. Replay only log records from checkpoint_offset to target_time
+         * 1. Get the table's last checkpoint LSN from metadata
+         * 2. Clone the LIVE table heap (which represents state at checkpoint)
+         * 3. Replay only log records from checkpoint_lsn to target_time
          * 4. Return the snapshot
-         *
-         * This is O(D) where D = records between checkpoint and target,
-         * instead of O(N) where N = total log size.
-         *
-         * @param checkpoint_index Optional checkpoint index for O(log K) lookup.
-         *                         If null, falls back to full replay.
+         * 
+         * This is O(delta) instead of O(total_log_size)
          */
         static std::unique_ptr<TableHeap> BuildSnapshot(
             const std::string& table_name,
-            uint64_t target_time,
-            IBufferManager* bpm,
+            uint64_t target_time, 
+            IBufferManager* bpm, 
             LogManager* log_manager,
             Catalog* catalog,
-            const std::string& db_name = "",
-            CheckpointIndex* checkpoint_index = nullptr) 
+            const std::string& db_name = "") 
         {
             std::string target_db = db_name;
             if (target_db.empty() && log_manager) {
@@ -150,36 +144,10 @@ namespace chronosdb {
             } else {
                 std::cout << "[SnapshotManager]   Target before checkpoint - full replay needed" << std::endl;
             }
-
-            // ================================================================
-            // CHECKPOINT INDEX OPTIMIZATION (O(log K) + O(D) instead of O(N))
-            // ================================================================
-            if (checkpoint_index != nullptr) {
-                const CheckpointEntry* nearest = checkpoint_index->FindNearestBefore(target_time);
-
-                if (nearest != nullptr && nearest->timestamp > 0) {
-                    // Found a checkpoint before target_time - use optimized path
-                    std::cout << "[SnapshotManager]   OPTIMIZATION: Using checkpoint at timestamp "
-                              << nearest->timestamp << " (LSN " << nearest->lsn
-                              << ", offset " << nearest->log_offset << ")" << std::endl;
-
-                    recovery.ReplayIntoHeapFromOffset(
-                        snapshot.get(),
-                        table_name,
-                        nearest->log_offset,  // Start from checkpoint position
-                        target_time,          // Stop at target
-                        target_db
-                    );
-
-                    return snapshot;
-                } else {
-                    std::cout << "[SnapshotManager]   No suitable checkpoint found - using full replay" << std::endl;
-                }
-            }
-
-            // Fallback: Replay from beginning to target_time
+            
+            // Replay from beginning to target_time
             recovery.ReplayIntoHeap(snapshot.get(), table_name, target_time, target_db);
-
+            
             return snapshot;
         }
         
