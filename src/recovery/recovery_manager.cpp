@@ -1064,13 +1064,15 @@ namespace chronosdb {
 
             // ================================================================
             // CHECKPOINT INDEX OPTIMIZATION (O(log K) + O(D) instead of O(N))
-            // CURRENTLY DISABLED FOR SAFETY - NEEDS MORE TESTING
+            //
+            // Use the checkpoint index to find the nearest checkpoint BEFORE
+            // target_time, then replay only from that offset.
             // ================================================================
 
             snapshot_heap = std::make_unique<TableHeap>(bpm_, nullptr);
             bool used_optimization = false;
 
-            if (false && checkpoint_mgr_ != nullptr) {  // DISABLED
+            if (checkpoint_mgr_ != nullptr) {
                 CheckpointIndex* checkpoint_index = checkpoint_mgr_->GetCheckpointIndex();
 
                 if (checkpoint_index != nullptr) {
@@ -1232,24 +1234,16 @@ namespace chronosdb {
     // SNAPSHOT (SELECT AS OF)
     // ========================================================================
 
-    void RecoveryManager::ReplayIntoHeap(TableHeap* target_heap,
-                                         const std::string& target_table_name,
+    void RecoveryManager::ReplayIntoHeap(TableHeap* target_heap, 
+                                         const std::string& target_table_name, 
                                          uint64_t target_time,
                                          const std::string& db_name) {
-        // Critical safety check
-        if (!target_heap || !log_manager_ || !catalog_) {
-            std::cerr << "[SNAPSHOT] ERROR: Null pointer - target_heap=" << (void*)target_heap
-                      << ", log_manager=" << (void*)log_manager_
-                      << ", catalog=" << (void*)catalog_ << std::endl;
-            return;
-        }
-
         // Determine which database to read from
         std::string actual_db = db_name;
         if (actual_db.empty() && log_manager_) {
             actual_db = log_manager_->GetCurrentDatabase();
         }
-
+        
         std::string log_path = log_manager_->GetLogFilePath(actual_db);
         
         std::cout << "[SNAPSHOT] Reading from database: " << actual_db << std::endl;
@@ -1531,33 +1525,27 @@ namespace chronosdb {
                                                     std::streampos start_offset,
                                                     uint64_t target_time,
                                                     const std::string& db_name) {
-        // Critical safety check
-        if (!target_heap || !log_manager_ || !catalog_) {
-            std::cerr << "[SNAPSHOT] ERROR: Null pointer - target_heap=" << (void*)target_heap
-                      << ", log_manager=" << (void*)log_manager_
-                      << ", catalog=" << (void*)catalog_ << std::endl;
-            return;
-        }
-
+        if (!target_heap || !log_manager_) return;
+        
         std::string actual_db = db_name;
         if (actual_db.empty() && log_manager_) {
             actual_db = log_manager_->GetCurrentDatabase();
         }
-
+        
         std::string log_path = log_manager_->GetLogFilePath(actual_db);
         std::ifstream log_file(log_path, std::ios::binary | std::ios::in);
-
+        
         if (!log_file.is_open()) {
             std::cerr << "[SNAPSHOT] Cannot open log file: " << log_path << std::endl;
             return;
         }
-
+        
         // Seek to the start offset (checkpoint position)
         if (start_offset > 0) {
             log_file.seekg(start_offset);
             std::cout << "[SNAPSHOT] Skipped to offset " << start_offset << " (checkpoint optimization)" << std::endl;
         }
-
+        
         auto table_info = catalog_->GetTable(target_table_name);
         if (!table_info) {
             std::cerr << "[SNAPSHOT] Table not found: " << target_table_name << std::endl;
