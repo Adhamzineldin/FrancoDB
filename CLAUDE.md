@@ -85,3 +85,12 @@ Tests are in `test/` organized by module (buffer, concurrency, execution, networ
 
 - Windows: Links ws2_32, uses MinGW/Ninja, auto-copies runtime DLLs
 - Linux: Links pthread, .deb package build available in `installers/linux/`
+
+
+## Git Commit Guidelines
+
+**IMPORTANT**: When creating git commits:
+- **NEVER** add "Co-Authored-By: Claude" or any AI attribution to commit messages
+- Keep commit messages professional and concise
+- Focus on what changed and why, not who wrote it
+- All code contributions should be attributed to the repository owner only

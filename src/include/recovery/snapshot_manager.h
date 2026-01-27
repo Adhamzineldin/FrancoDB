@@ -3,6 +3,7 @@
 #include "recovery/recovery_manager.h"
 #include "recovery/log_manager.h"
 #include "recovery/checkpoint_manager.h"
+#include "recovery/time_travel_engine.h"
 #include "storage/table/table_heap.h"
 #include "catalog/catalog.h"
 #include "catalog/table_metadata.h"
@@ -18,100 +19,73 @@
 namespace chronosdb {
 
     /**
-     * Checkpoint-Based Snapshot Manager
-     * 
-     * PROPER FIX FOR BUG #6: O(N) Time-Travel Degradation
-     * ====================================================
-     * 
-     * The Problem:
-     * - Old approach: Replay from LSN 0 every time = O(N) where N is total log size
-     * - Even with caching, cache misses cause full replay
-     * 
-     * The Solution:
-     * - Each table tracks its last checkpoint LSN (stored in TableMetadata)
-     * - The LIVE table heap IS the checkpoint snapshot (at checkpoint_lsn)
-     * - Time travel = Clone live table + replay only the delta (checkpoint_lsn to target_time)
-     * 
-     * Complexity:
-     * - O(D) where D = number of log records between checkpoint and target_time
-     * - D << N for recent queries (which are the common case)
-     * 
-     * Example:
-     * - Table checkpointed at LSN 10000, current LSN is 10500
-     * - Query: SELECT * FROM users AS OF '5 minutes ago' (LSN ~10400)
-     * - Old way: Replay LSN 0 to 10400 = 10400 records
-     * - New way: Clone live table (at LSN 10000) + replay LSN 10000 to 10400 = 400 records
-     * - 26x faster!
+     * Snapshot Manager - Time Travel Interface
+     *
+     * ENHANCED WITH REVERSE DELTA STRATEGY
+     * =====================================
+     *
+     * This class now delegates to TimeTravelEngine which implements
+     * the "Reverse Delta" strategy for efficient time travel:
+     *
+     * - Instead of replaying forward from genesis (O(N))
+     * - We start from current state and apply inverse operations backwards (O(K))
+     * - Where K = number of operations between target_time and now
+     *
+     * Benefits:
+     * - Recent queries (common case) are O(delta) not O(total_history)
+     * - Automatic strategy selection (reverse delta vs forward replay)
+     * - Optimized for "recent past" queries
+     *
+     * The TimeTravelEngine automatically chooses the best strategy:
+     * - REVERSE_DELTA: For recent queries (within threshold, default 1 hour)
+     * - FORWARD_REPLAY: For distant past queries (before checkpoint)
      */
     class SnapshotManager {
     public:
         /**
-         * Build a snapshot using checkpoint-based optimization.
-         * 
-         * Algorithm:
-         * 1. Get the table's last checkpoint LSN from metadata
-         * 2. Clone the LIVE table heap (which represents state at checkpoint)
-         * 3. Replay only log records from checkpoint_lsn to target_time
-         * 4. Return the snapshot
-         * 
-         * This is O(delta) instead of O(total_log_size)
+         * Build a snapshot using the optimal strategy.
+         *
+         * NEW ALGORITHM (Reverse Delta):
+         * 1. Check if target_time is "recent" (within threshold)
+         * 2. If recent: Clone current state, undo operations backwards
+         * 3. If distant: Fall back to forward replay
+         *
+         * This is O(delta) for recent queries instead of O(total_log_size)
          */
         static std::unique_ptr<TableHeap> BuildSnapshot(
             const std::string& table_name,
-            uint64_t target_time, 
-            IBufferManager* bpm, 
+            uint64_t target_time,
+            IBufferManager* bpm,
             LogManager* log_manager,
             Catalog* catalog,
-            const std::string& db_name = "") 
+            const std::string& db_name = "")
         {
             std::string target_db = db_name;
             if (target_db.empty() && log_manager) {
                 target_db = log_manager->GetCurrentDatabase();
             }
-            
+
             // Get table metadata
             auto* table_info = catalog->GetTable(table_name);
             if (!table_info) {
                 std::cerr << "[SnapshotManager] Table not found: " << table_name << std::endl;
                 return nullptr;
             }
-            
+
             LogRecord::lsn_t checkpoint_lsn = table_info->GetCheckpointLSN();
             LogRecord::lsn_t current_lsn = log_manager ? log_manager->GetNextLSN() : 0;
-            
+
             std::cout << "[SnapshotManager] Building snapshot for '" << table_name << "'" << std::endl;
-            std::cout << "[SnapshotManager]   Checkpoint LSN: " << checkpoint_lsn 
+            std::cout << "[SnapshotManager]   Checkpoint LSN: " << checkpoint_lsn
                       << ", Current LSN: " << current_lsn << std::endl;
-            
-            // ================================================================
-            // CHECKPOINT-BASED TIME TRAVEL (Git-style)
-            // 
-            // We already have the checkpoint LSN from table metadata!
-            // 
-            // CRITICAL UNDERSTANDING:
-            // - The LIVE TABLE represents the CURRENT state (all operations applied)
-            // - The checkpoint LSN tells us when the last checkpoint was taken
-            // - We DON'T store actual table snapshots at checkpoints
-            // 
-            // Therefore:
-            // 1. If target_time >= current_time: Use live table (O(1))
-            // 2. Otherwise: MUST replay from LSN 0 to target_time
-            //    (because we don't have stored checkpoint snapshots)
-            //
-            // The checkpoint helps RECOVER TO (which modifies live table)
-            // but not AS OF (which needs historical state without snapshots)
-            // ================================================================
-            
-            auto snapshot = std::make_unique<TableHeap>(bpm, nullptr);
-            RecoveryManager recovery(log_manager, catalog, bpm, nullptr);
-            
+
             uint64_t current_time = LogRecord::GetCurrentTimestamp();
-            
-            // Special case: querying current or future state
+
+            // Special case: querying current or future state - just clone live table
             if (target_time >= current_time) {
                 std::cout << "[SnapshotManager]   Target is current/future - using live table" << std::endl;
-                
-                // Clone the live table
+
+                auto snapshot = std::make_unique<TableHeap>(bpm, nullptr);
                 auto live_heap = table_info->table_heap_.get();
                 if (live_heap) {
                     auto iter = live_heap->Begin(nullptr);
@@ -127,28 +101,23 @@ namespace chronosdb {
                 }
                 return snapshot;
             }
-            
-            // Historical query - must replay log
-            // Use checkpoint info for progress estimation
-            uint64_t checkpoint_time = 0;
-            if (checkpoint_lsn != LogRecord::INVALID_LSN) {
-                checkpoint_time = GetCheckpointTimestamp(log_manager, target_db, checkpoint_lsn);
-            }
-            
-            if (checkpoint_time > 0 && target_time >= checkpoint_time) {
-                // Target is AFTER last checkpoint but BEFORE current time
-                // We need to replay, but we can show the delta info
-                uint64_t delta_seconds = (current_time - target_time) / 1000000;
-                std::cout << "[SnapshotManager]   Historical query (" << delta_seconds << " seconds ago)" << std::endl;
-                std::cout << "[SnapshotManager]   Checkpoint at: " << checkpoint_time << std::endl;
-            } else {
-                std::cout << "[SnapshotManager]   Target before checkpoint - full replay needed" << std::endl;
-            }
-            
-            // Replay from beginning to target_time
-            recovery.ReplayIntoHeap(snapshot.get(), table_name, target_time, target_db);
-            
-            return snapshot;
+
+            // ================================================================
+            // USE REVERSE DELTA TIME TRAVEL ENGINE
+            //
+            // The TimeTravelEngine automatically chooses the best strategy:
+            // - For recent queries: REVERSE_DELTA (clone + undo backwards)
+            // - For distant queries: FORWARD_REPLAY (replay from beginning)
+            // ================================================================
+
+            uint64_t delta_seconds = (current_time - target_time) / 1000000;
+            std::cout << "[SnapshotManager]   Historical query (" << delta_seconds << " seconds ago)" << std::endl;
+
+            // Use TimeTravelEngine with AUTO strategy selection
+            TimeTravelEngine engine(log_manager, catalog, bpm, nullptr);
+
+            return engine.BuildSnapshot(table_name, target_time, target_db,
+                                        TimeTravelEngine::Strategy::AUTO);
         }
         
         /**

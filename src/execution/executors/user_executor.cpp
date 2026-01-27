@@ -20,7 +20,16 @@ ExecutionResult UserExecutor::CreateUser(CreateUserStatement* stmt) {
     if (!stmt) {
         return ExecutionResult::Error("[User] Invalid CREATE USER statement");
     }
-    
+
+    if (!auth_manager_) {
+        return ExecutionResult::Error("[User] Auth manager not initialized");
+    }
+
+    // Check if user already exists
+    if (auth_manager_->CheckUserExists(stmt->username_)) {
+        return ExecutionResult::Error("[User] User '" + stmt->username_ + "' already exists");
+    }
+
     UserRole r = UserRole::NORMAL;
     std::string role_upper = stmt->role_;
     std::transform(role_upper.begin(), role_upper.end(), role_upper.begin(), ::toupper);
@@ -28,11 +37,12 @@ ExecutionResult UserExecutor::CreateUser(CreateUserStatement* stmt) {
     if (role_upper == "ADMIN") r = UserRole::ADMIN;
     else if (role_upper == "SUPERADMIN") r = UserRole::SUPERADMIN;
     else if (role_upper == "READONLY") r = UserRole::READONLY;
+    else if (role_upper == "USER" || role_upper == "NORMAL") r = UserRole::NORMAL;
 
     if (auth_manager_->CreateUser(stmt->username_, stmt->password_, r)) {
-        return ExecutionResult::Message("User created successfully.");
+        return ExecutionResult::Message("User '" + stmt->username_ + "' created successfully with role " + role_upper + ".");
     }
-    return ExecutionResult::Error("User creation failed.");
+    return ExecutionResult::Error("[User] Failed to create user '" + stmt->username_ + "'. Internal error.");
 }
 
 // ============================================================================

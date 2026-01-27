@@ -29,6 +29,7 @@
 // Recovery
 #include "recovery/checkpoint_manager.h"
 #include "recovery/recovery_manager.h"
+#include "recovery/time_travel_engine.h"
 
 // Common
 #include "common/exception.h"
@@ -366,48 +367,69 @@ namespace chronosdb {
     }
 
     ExecutionResult ExecutionEngine::ExecuteRecover(RecoverStatement *stmt) {
-        std::cout << "[SYSTEM] Preparing for Time Travel..." << std::endl;
+        std::cout << "[SYSTEM] Preparing for Time Travel (Reverse Delta Strategy)..." << std::endl;
 
         uint64_t target_time = stmt->timestamp_;
-        
+
         // Special case: UINT64_MAX means "recover to latest"
         bool recover_to_latest = (target_time == UINT64_MAX);
-        
+
         if (recover_to_latest) {
             std::cout << "[SYSTEM] Recovering to LATEST state..." << std::endl;
         } else {
             uint64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
-            
+
             // Allow timestamps up to 1 minute in the future (treat as "now")
             uint64_t one_minute = 60ULL * 1000000ULL;  // microseconds
             if (target_time > now + one_minute) {
                 return ExecutionResult::Error("Cannot travel to the future! Use 'RECOVER TO LATEST' for current state.");
             }
-            
+
             if (target_time == 0) {
                 return ExecutionResult::Error("Invalid timestamp (0). Use 'RECOVER TO LATEST' for current state.");
             }
-            
+
             std::cout << "[SYSTEM] Initiating Time Travel to: " << target_time << std::endl;
         }
 
-        // Force Buffer Pool Flush (but don't stop the flush thread - that causes deadlock)
+        // Force Buffer Pool Flush before recovery
         bpm_->FlushAllPages();
-        log_manager_->Flush(true);  // Force flush the log
+        log_manager_->Flush(true);
 
         try {
-            CheckpointManager cp_mgr(bpm_, log_manager_);
-            cp_mgr.SetCatalog(catalog_);  // CRITICAL: Set catalog so checkpoint updates table LSNs
-            RecoveryManager recovery(log_manager_, catalog_, bpm_, &cp_mgr);
+            // ================================================================
+            // USE REVERSE DELTA TIME TRAVEL ENGINE
+            //
+            // The TimeTravelEngine provides:
+            // - ATOMIC recovery (all-or-nothing)
+            // - REVERSE DELTA strategy for recent queries (O(delta) not O(N))
+            // - Automatic fallback to FORWARD REPLAY for distant past
+            // ================================================================
 
-            recovery.RecoverToTime(target_time);
-            
+            CheckpointManager cp_mgr(bpm_, log_manager_);
+            cp_mgr.SetCatalog(catalog_);
+
+            TimeTravelEngine time_travel(log_manager_, catalog_, bpm_, &cp_mgr);
+
+            std::string db_name = log_manager_->GetCurrentDatabase();
+            auto result = time_travel.RecoverTo(target_time, db_name);
+
+            if (!result.success) {
+                return ExecutionResult::Error(std::string("Recovery Failed: ") + result.error_message);
+            }
+
+            std::cout << "[SYSTEM] Strategy used: "
+                      << (result.strategy_used == TimeTravelEngine::Strategy::REVERSE_DELTA
+                          ? "REVERSE_DELTA" : "FORWARD_REPLAY") << std::endl;
+            std::cout << "[SYSTEM] Records processed: " << result.records_processed << std::endl;
+            std::cout << "[SYSTEM] Time elapsed: " << result.elapsed_ms << "ms" << std::endl;
+
             // Flush after recovery to persist changes
             bpm_->FlushAllPages();
             log_manager_->Flush(true);
-            
-            // CRITICAL: Save catalog to persist table metadata changes
+
+            // Save catalog to persist table metadata changes
             if (catalog_) {
                 catalog_->SaveCatalog();
             }
@@ -416,11 +438,11 @@ namespace chronosdb {
         }
 
         std::cout << "[SYSTEM] Time Travel Complete. Resuming normal operations." << std::endl;
-        
+
         if (recover_to_latest) {
             return ExecutionResult::Message("RECOVERED TO LATEST. System state restored to most recent.");
         }
-        return ExecutionResult::Message("TIME TRAVEL COMPLETE. System state reverted.");
+        return ExecutionResult::Message("TIME TRAVEL COMPLETE. System state reverted using Reverse Delta strategy.");
     }
     
     ExecutionResult ExecutionEngine::ExecuteStopServer(SessionContext* session) {
