@@ -225,6 +225,9 @@ private:
                                const InverseOperation& op,
                                const TableMetadata* table_info);
 
+    void ApplyInverseOperationOptimized(TableHeap *heap, const InverseOperation &op, const TableMetadata *table_info,
+                                        std::unordered_multimap<std::string, RID> &tuple_lookup);
+
     // ========================================================================
     // FORWARD REPLAY IMPLEMENTATION (Fallback)
     // ========================================================================
