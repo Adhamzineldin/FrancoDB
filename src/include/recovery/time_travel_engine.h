@@ -102,6 +102,8 @@ public:
         std::vector<Value> new_values;         // For undo UPDATE (find this)
     };
 
+    std::streampos FindClosestLogOffset(std::ifstream &log_file, uint64_t target_time);
+
     /**
      * Constructor
      */
