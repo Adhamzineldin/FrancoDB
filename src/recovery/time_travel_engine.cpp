@@ -106,7 +106,7 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshot(
 }
 
 // ============================================================================
-// REVERSE DELTA - FULLY OPTIMIZED
+// REVERSE DELTA - FULLY OPTIMIZED (ORDER-PRESERVING)
 // ============================================================================
 
 std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
@@ -123,12 +123,23 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
     const Schema& schema = table_info->schema_;
 
     // =========================================================================
-    // PHASE 1: Load current table into MEMORY
+    // PHASE 1: Load current table into MEMORY (preserving order)
     // =========================================================================
     LOG_DEBUG(LOG_COMPONENT, "Phase 1: Loading current table state into memory");
 
-    std::unordered_multimap<std::string, std::vector<Value>> in_memory_table;
-    in_memory_table.reserve(10000);
+    // Use vector for ordered storage + multimap for fast key lookups
+    // Each entry: (key, values, deleted_flag)
+    struct RowEntry {
+        std::string key;
+        std::vector<Value> values;
+        bool deleted = false;
+    };
+    std::vector<RowEntry> ordered_rows;
+    ordered_rows.reserve(10000);
+
+    // Map from key to indices in ordered_rows (for fast lookup during undo)
+    std::unordered_multimap<std::string, size_t> key_to_indices;
+    key_to_indices.reserve(10000);
 
     size_t row_count = 0;
     auto iter = table_info->table_heap_->Begin(nullptr);
@@ -140,7 +151,11 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
             vals.push_back(tuple.GetValue(schema, i));
         }
         std::string key = MakeTupleKey(vals);
-        in_memory_table.emplace(key, std::move(vals));
+
+        size_t idx = ordered_rows.size();
+        ordered_rows.push_back({key, std::move(vals), false});
+        key_to_indices.emplace(key, idx);
+
         ++iter;
         row_count++;
     }
@@ -238,31 +253,47 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
             for (const auto& op : ops_to_undo) {
                 switch (op.original_type) {
                     case LogRecordType::INSERT: {
+                        // Undo INSERT = mark as deleted
                         if (!op.values_to_delete.empty()) {
                             std::string key = MakeTupleKey(op.values_to_delete);
-                            auto range = in_memory_table.equal_range(key);
-                            if (range.first != range.second) {
-                                in_memory_table.erase(range.first);
+                            auto range = key_to_indices.equal_range(key);
+                            for (auto it = range.first; it != range.second; ++it) {
+                                size_t idx = it->second;
+                                if (!ordered_rows[idx].deleted) {
+                                    ordered_rows[idx].deleted = true;
+                                    break; // Only delete first matching non-deleted row
+                                }
                             }
                         }
                         break;
                     }
                     case LogRecordType::MARK_DELETE:
                     case LogRecordType::APPLY_DELETE: {
+                        // Undo DELETE = re-insert at end (maintains relative order)
                         if (!op.values_to_insert.empty()) {
                             std::string key = MakeTupleKey(op.values_to_insert);
-                            in_memory_table.emplace(key, op.values_to_insert);
+                            size_t idx = ordered_rows.size();
+                            ordered_rows.push_back({key, op.values_to_insert, false});
+                            key_to_indices.emplace(key, idx);
                         }
                         break;
                     }
                     case LogRecordType::UPDATE: {
+                        // Undo UPDATE = replace new values with old values
                         if (!op.new_values.empty() && !op.old_values.empty()) {
                             std::string new_key = MakeTupleKey(op.new_values);
-                            auto range = in_memory_table.equal_range(new_key);
-                            if (range.first != range.second) {
-                                in_memory_table.erase(range.first);
-                                std::string old_key = MakeTupleKey(op.old_values);
-                                in_memory_table.emplace(old_key, op.old_values);
+                            auto range = key_to_indices.equal_range(new_key);
+                            for (auto it = range.first; it != range.second; ++it) {
+                                size_t idx = it->second;
+                                if (!ordered_rows[idx].deleted) {
+                                    // Update the values in place
+                                    ordered_rows[idx].values = op.old_values;
+                                    ordered_rows[idx].key = MakeTupleKey(op.old_values);
+                                    // Update the index
+                                    key_to_indices.erase(it);
+                                    key_to_indices.emplace(ordered_rows[idx].key, idx);
+                                    break;
+                                }
                             }
                         }
                         break;
@@ -276,21 +307,25 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
 
 materialize:
     // =========================================================================
-    // PHASE 4: Materialize in-memory table to TableHeap
+    // PHASE 4: Materialize in-memory table to TableHeap (in original order)
     // =========================================================================
-    LOG_DEBUG(LOG_COMPONENT, "Phase 4: Materializing %zu rows to TableHeap", in_memory_table.size());
+    size_t active_rows = 0;
+    for (const auto& row : ordered_rows) {
+        if (!row.deleted) active_rows++;
+    }
+    LOG_DEBUG(LOG_COMPONENT, "Phase 4: Materializing %zu rows to TableHeap", active_rows);
 
     auto snapshot = std::make_unique<TableHeap>(bpm_, nullptr);
 
-    for (const auto& [key, vals] : in_memory_table) {
-        if (vals.size() == schema.GetColumnCount()) {
-            Tuple tuple(vals, schema);
+    for (const auto& row : ordered_rows) {
+        if (!row.deleted && row.values.size() == schema.GetColumnCount()) {
+            Tuple tuple(row.values, schema);
             RID rid;
             snapshot->InsertTuple(tuple, &rid, nullptr);
         }
     }
 
-    LOG_DEBUG(LOG_COMPONENT, "Snapshot complete with %zu rows", in_memory_table.size());
+    LOG_DEBUG(LOG_COMPONENT, "Snapshot complete with %zu rows", active_rows);
     return snapshot;
 }
 
