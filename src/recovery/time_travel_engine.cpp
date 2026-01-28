@@ -247,7 +247,7 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
         });
 
     for (const auto& op : ops_to_undo) {
-        ApplyInverseOperationOptimized(snapshot.get(), op, table_info, tuple_lookup);
+        ApplyInverseOperation(snapshot.get(), op, table_info, tuple_lookup);
     }
 
     return snapshot;
@@ -426,64 +426,10 @@ TimeTravelEngine::TimeTravelResult TimeTravelEngine::RecoverTo(
 // ============================================================================
 // APPLY INVERSE OPERATION
 // ============================================================================
-
-void TimeTravelEngine::ApplyInverseOperation(
-    TableHeap* heap,
-    const InverseOperation& op,
-    const TableMetadata* table_info) {
-
-    if (!heap || !table_info) return;
-
-    switch (op.original_type) {
-        case LogRecordType::INSERT: {
-            // Undo INSERT = DELETE
-            if (op.values_to_delete.empty()) return;
-            auto iter = heap->Begin(nullptr);
-            while (iter != heap->End()) {
-                if (TupleMatches(*iter, op.values_to_delete, table_info)) {
-                    heap->MarkDelete(iter.GetRID(), nullptr);
-                    return;
-                }
-                ++iter;
-            }
-            break;
-        }
-        case LogRecordType::MARK_DELETE:
-        case LogRecordType::APPLY_DELETE: {
-            // Undo DELETE = INSERT
-            if (op.values_to_insert.empty()) return;
-            if (op.values_to_insert.size() == table_info->schema_.GetColumnCount()) {
-                Tuple t(op.values_to_insert, table_info->schema_);
-                RID rid;
-                heap->InsertTuple(t, &rid, nullptr);
-            }
-            break;
-        }
-        case LogRecordType::UPDATE: {
-            // Undo UPDATE = Replace new with old
-            if (op.new_values.empty() || op.old_values.empty()) return;
-            auto iter = heap->Begin(nullptr);
-            while (iter != heap->End()) {
-                if (TupleMatches(*iter, op.new_values, table_info)) {
-                    heap->MarkDelete(iter.GetRID(), nullptr);
-                    if (op.old_values.size() == table_info->schema_.GetColumnCount()) {
-                        Tuple t(op.old_values, table_info->schema_);
-                        RID rid;
-                        heap->InsertTuple(t, &rid, nullptr);
-                    }
-                    return;
-                }
-                ++iter;
-            }
-            break;
-        }
-        default:
-            break;
-    }
-}
+    
 
     
-void TimeTravelEngine::ApplyInverseOperationOptimized(
+void TimeTravelEngine::ApplyInverseOperation(
     TableHeap* heap,
     const InverseOperation& op,
     const TableMetadata* table_info,

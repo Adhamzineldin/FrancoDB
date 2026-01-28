@@ -221,11 +221,9 @@ private:
      * - DELETE -> INSERT the deleted row
      * - UPDATE -> Replace new values with old values
      */
-    void ApplyInverseOperation(TableHeap* heap,
-                               const InverseOperation& op,
-                               const TableMetadata* table_info);
+  
 
-    void ApplyInverseOperationOptimized(TableHeap *heap, const InverseOperation &op, const TableMetadata *table_info,
+    void ApplyInverseOperation(TableHeap *heap, const InverseOperation &op, const TableMetadata *table_info,
                                         std::unordered_multimap<std::string, RID> &tuple_lookup);
 
     // ========================================================================
