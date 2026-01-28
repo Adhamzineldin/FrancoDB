@@ -108,6 +108,12 @@ public:
     std::streampos FindClosestLogOffset(std::ifstream &log_file, uint64_t target_time);
 
     /**
+     * Binary search to find log offset where timestamps >= target_time start.
+     * Returns the offset to begin scanning from (O(log N) instead of O(N)).
+     */
+    size_t FindStartOffsetForTimestamp(LogPageReader& reader, uint64_t target_time);
+
+    /**
      * Constructor
      */
     TimeTravelEngine(LogManager* log_manager, Catalog* catalog,

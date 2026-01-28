@@ -178,6 +178,19 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
     }
 
     {
+        // =====================================================================
+        // OPTIMIZATION: Binary search to skip directly to relevant log section
+        // Instead of O(N) scan from beginning, use O(log N) binary search
+        // =====================================================================
+        size_t start_offset = FindStartOffsetForTimestamp(reader, target_time);
+        if (start_offset > 0) {
+            LOG_DEBUG(LOG_COMPONENT, "Binary search: starting scan at offset %zu (skipped %zu bytes)",
+                     start_offset, start_offset);
+            reader.Seek(start_offset);
+        } else {
+            reader.Seek(0); // Start from beginning if binary search failed
+        }
+
         std::vector<InverseOperation> ops_to_undo;
         ops_to_undo.reserve(1000);
 
@@ -195,6 +208,7 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
             }
 
             // Skip records at or before target time
+            // (binary search gets us close, but we may need to skip a few more)
             if (record.timestamp_ <= target_time) {
                 continue;
             }
@@ -847,7 +861,110 @@ Value TimeTravelEngine::ReadValue(std::ifstream& in) {
     return Value(type, s_val);
 }
 
-// Stubs
+// ============================================================================
+// BINARY SEARCH FOR LOG OFFSET BY TIMESTAMP
+// ============================================================================
+
+/**
+ * Find the log file offset where records with timestamp >= target_time begin.
+ * Uses binary search for O(log N) instead of O(N) linear scan.
+ *
+ * Returns the offset to start scanning from. May return 0 if target_time
+ * is before all records or if binary search fails.
+ */
+size_t TimeTravelEngine::FindStartOffsetForTimestamp(LogPageReader& reader, uint64_t target_time) {
+    size_t file_size = reader.GetFileSize();
+    if (file_size < 36) return 0; // File too small
+
+    // Header layout: size(4) + lsn(4) + prev_lsn(4) + undo_next(4) + txn_id(4) + timestamp(8)
+    // Timestamp is at offset 20 from record start
+    constexpr size_t TIMESTAMP_OFFSET = 20;
+    constexpr size_t MIN_RECORD_SIZE = 36;
+
+    size_t low = 0;
+    size_t high = file_size;
+    size_t best_offset = 0; // Best offset found so far
+
+    // Binary search to find approximate position
+    while (low + MIN_RECORD_SIZE < high) {
+        size_t mid = low + (high - low) / 2;
+
+        // Scan forward from mid to find a valid record
+        size_t scan_pos = mid;
+        bool found_record = false;
+        uint64_t record_timestamp = 0;
+        size_t record_start = 0;
+
+        // Try to find a valid record within 4KB from mid
+        for (size_t attempt = 0; attempt < 4096 && scan_pos + MIN_RECORD_SIZE <= file_size; attempt++) {
+            int32_t record_size = 0;
+            if (reader.Read(scan_pos, reinterpret_cast<char*>(&record_size), sizeof(int32_t)) != sizeof(int32_t)) {
+                scan_pos++;
+                continue;
+            }
+
+            // Valid record size check (reasonable bounds)
+            if (record_size > 0 && record_size < 10000000 && scan_pos + record_size <= file_size) {
+                // Read timestamp
+                if (reader.Read(scan_pos + TIMESTAMP_OFFSET, reinterpret_cast<char*>(&record_timestamp), sizeof(uint64_t)) == sizeof(uint64_t)) {
+                    // Sanity check: timestamp should be reasonable (after year 2000, before year 2100)
+                    // In microseconds: 2000 = ~946684800000000, 2100 = ~4102444800000000
+                    if (record_timestamp > 946684800000000ULL && record_timestamp < 4102444800000000ULL) {
+                        found_record = true;
+                        record_start = scan_pos;
+                        break;
+                    }
+                }
+            }
+            scan_pos++;
+        }
+
+        if (!found_record) {
+            // Couldn't find valid record in this region, try lower half
+            high = mid;
+            continue;
+        }
+
+        if (record_timestamp < target_time) {
+            // This record is before target, search in upper half
+            low = record_start + 1;
+        } else {
+            // This record is at or after target, search in lower half
+            // But remember this as a candidate
+            best_offset = record_start;
+            high = record_start;
+        }
+    }
+
+    // Now do a linear scan backwards from best_offset to find the exact transition point
+    // This ensures we don't miss any records right at the boundary
+    if (best_offset > 0) {
+        // Scan a bit before best_offset to ensure we capture the boundary
+        size_t scan_back = (best_offset > 8192) ? (best_offset - 8192) : 0;
+        reader.Seek(scan_back);
+
+        size_t last_before_target = 0;
+        LogRecord temp_record(0, 0, LogRecordType::INVALID);
+
+        while (reader.Tell() < best_offset + 4096 && !reader.Eof()) {
+            size_t pos_before = reader.Tell();
+            if (ReadLogRecordFromReader(reader, temp_record)) {
+                if (temp_record.timestamp_ < target_time) {
+                    last_before_target = reader.Tell(); // Position after this record
+                } else {
+                    // Found first record at or after target
+                    return (last_before_target > 0) ? last_before_target : pos_before;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    return best_offset;
+}
+
+// Legacy stub (for ifstream interface - deprecated)
 std::streampos TimeTravelEngine::FindClosestLogOffset(std::ifstream&, uint64_t) { return 0; }
 TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t, const std::string&) { return Strategy::AUTO; }
 int TimeTravelEngine::EstimateOperationCount(uint64_t, const std::string&) { return 0; }
