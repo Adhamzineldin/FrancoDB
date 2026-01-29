@@ -28,10 +28,10 @@ static constexpr const char* LOG_COMPONENT = "TimeTravel";
 
 // Safety limits - these prevent infinite loops from corrupted logs
 // MAX_RECORD_SIZE: Single record can't exceed 10MB (protects against corrupted size field)
-// PROGRESS_INTERVAL: Log progress for monitoring long operations
+// PROGRESS_INTERVAL: Log progress for monitoring long operations (every 10k for visibility)
 // Note: No limit on total records - we rely on proper EOF detection via LogPageReader
 static constexpr size_t MAX_RECORD_SIZE = 10000000;  // 10MB max single record
-static constexpr size_t PROGRESS_INTERVAL = 100000;  // Log progress every 100k records
+static constexpr size_t PROGRESS_INTERVAL = 10000;   // Log progress every 10k records (was 100k)
 
 // ============================================================================
 // HELPERS
@@ -91,8 +91,22 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshot(
         return CloneTable(table_name);
     }
 
-    // Use reverse delta
-    auto result = BuildSnapshotReverseDelta(table_name, target_time, actual_db);
+    // Strategy selection: choose between forward replay and reverse delta
+    // Forward replay is better for distant past (fewer ops to replay)
+    // Reverse delta is better for recent past (fewer ops to undo)
+    Strategy chosen = strategy;
+    if (strategy == Strategy::AUTO) {
+        chosen = ChooseStrategy(target_time, actual_db);
+    }
+
+    std::unique_ptr<TableHeap> result;
+    if (chosen == Strategy::FORWARD_REPLAY) {
+        LOG_DEBUG(LOG_COMPONENT, "Using FORWARD_REPLAY strategy");
+        result = BuildSnapshotForwardReplay(table_name, target_time, actual_db);
+    } else {
+        LOG_DEBUG(LOG_COMPONENT, "Using REVERSE_DELTA strategy");
+        result = BuildSnapshotReverseDelta(table_name, target_time, actual_db);
+    }
 
     auto end = std::chrono::high_resolution_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -201,9 +215,9 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
         while (ReadLogRecordFromReader(reader, record)) {
             records_scanned++;
 
-            // Progress logging
+            // Progress logging (INFO level so users can see it's working)
             if (records_scanned % PROGRESS_INTERVAL == 0) {
-                LOG_DEBUG(LOG_COMPONENT, "Scanned %zu records, collected %zu ops",
+                LOG_INFO(LOG_COMPONENT, "Reverse delta: scanned %zu records, collected %zu ops to undo",
                          records_scanned, records_collected);
             }
 
@@ -476,9 +490,9 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotForwardReplay(
     while (ReadLogRecordFromReader(reader, record)) {
         records_processed++;
 
-        // Progress logging for long operations
+        // Progress logging for long operations (INFO level for visibility)
         if (records_processed % PROGRESS_INTERVAL == 0) {
-            LOG_DEBUG(LOG_COMPONENT, "Forward replay: %zu records processed", records_processed);
+            LOG_INFO(LOG_COMPONENT, "Forward replay: %zu records processed", records_processed);
         }
 
         // Stop at target time
@@ -966,7 +980,91 @@ size_t TimeTravelEngine::FindStartOffsetForTimestamp(LogPageReader& reader, uint
 
 // Legacy stub (for ifstream interface - deprecated)
 std::streampos TimeTravelEngine::FindClosestLogOffset(std::ifstream&, uint64_t) { return 0; }
-TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t, const std::string&) { return Strategy::AUTO; }
+
+/**
+ * Choose the best strategy based on where target_time falls in the log's time range.
+ *
+ * - If target_time is in the first half of the log's time range, use FORWARD_REPLAY
+ *   (fewer operations to replay from genesis to target)
+ * - If target_time is in the second half, use REVERSE_DELTA
+ *   (fewer operations to undo from current to target)
+ */
+TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t target_time, const std::string& db_name) {
+    if (!log_manager_) return Strategy::REVERSE_DELTA;
+
+    std::string log_path = log_manager_->GetLogFilePath(db_name);
+    LogPageReader reader(16); // Small cache for probing
+    if (!reader.Open(log_path)) {
+        return Strategy::REVERSE_DELTA; // No log = current state
+    }
+
+    size_t file_size = reader.GetFileSize();
+    if (file_size < 36) {
+        return Strategy::REVERSE_DELTA; // Tiny log
+    }
+
+    // Read first timestamp from beginning
+    uint64_t first_timestamp = 0;
+    constexpr size_t TIMESTAMP_OFFSET = 20; // After size(4)+lsn(4)+prev_lsn(4)+undo_next(4)+txn_id(4)
+    reader.Read(TIMESTAMP_OFFSET, reinterpret_cast<char*>(&first_timestamp), sizeof(uint64_t));
+
+    // Read last timestamp (approximate - read from near end)
+    uint64_t last_timestamp = 0;
+    if (file_size > 100) {
+        // Scan backwards to find a valid record near the end
+        for (size_t attempt = 0; attempt < 10 && last_timestamp == 0; attempt++) {
+            size_t probe_offset = file_size - 36 - (attempt * 100);
+            if (probe_offset < file_size) {
+                // Try to find a valid record size
+                for (size_t scan = 0; scan < 100 && probe_offset + scan + 36 <= file_size; scan++) {
+                    int32_t size = 0;
+                    reader.Read(probe_offset + scan, reinterpret_cast<char*>(&size), sizeof(int32_t));
+                    if (size > 0 && size < 10000000) {
+                        uint64_t ts = 0;
+                        reader.Read(probe_offset + scan + TIMESTAMP_OFFSET,
+                                   reinterpret_cast<char*>(&ts), sizeof(uint64_t));
+                        // Sanity check timestamp (year 2000-2100 in microseconds)
+                        if (ts > 946684800000000ULL && ts < 4102444800000000ULL) {
+                            last_timestamp = ts;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    reader.Close();
+
+    // If we couldn't determine time range, default to reverse delta (usually faster for recent)
+    if (first_timestamp == 0 || last_timestamp == 0 || last_timestamp <= first_timestamp) {
+        LOG_DEBUG(LOG_COMPONENT, "Could not determine log time range, using REVERSE_DELTA");
+        return Strategy::REVERSE_DELTA;
+    }
+
+    // Calculate where target falls in the time range (0.0 = beginning, 1.0 = end)
+    uint64_t time_range = last_timestamp - first_timestamp;
+    double position = (target_time <= first_timestamp) ? 0.0 :
+                      (target_time >= last_timestamp) ? 1.0 :
+                      static_cast<double>(target_time - first_timestamp) / time_range;
+
+    LOG_DEBUG(LOG_COMPONENT, "Strategy selection: first_ts=%llu, last_ts=%llu, target=%llu, position=%.2f",
+              static_cast<unsigned long long>(first_timestamp),
+              static_cast<unsigned long long>(last_timestamp),
+              static_cast<unsigned long long>(target_time),
+              position);
+
+    // Use FORWARD_REPLAY if target is in first 40% of time range
+    // Use REVERSE_DELTA if target is in last 60% (biased towards reverse for recent queries)
+    if (position < 0.4) {
+        LOG_DEBUG(LOG_COMPONENT, "Choosing FORWARD_REPLAY (target in first 40%% of log)");
+        return Strategy::FORWARD_REPLAY;
+    } else {
+        LOG_DEBUG(LOG_COMPONENT, "Choosing REVERSE_DELTA (target in last 60%% of log)");
+        return Strategy::REVERSE_DELTA;
+    }
+}
+
 int TimeTravelEngine::EstimateOperationCount(uint64_t, const std::string&) { return 0; }
 TimeTravelEngine::TimeTravelResult TimeTravelEngine::RecoverToReverseDelta(uint64_t t, const std::string& db) { return RecoverTo(t, db); }
 TimeTravelEngine::TimeTravelResult TimeTravelEngine::RecoverToForwardReplay(uint64_t t, const std::string& db) { return RecoverTo(t, db); }
