@@ -1465,20 +1465,19 @@ size_t TimeTravelEngine::FindStartOffsetForTimestamp(LogPageReader& reader, uint
 std::streampos TimeTravelEngine::FindClosestLogOffset(std::ifstream&, uint64_t) { return 0; }
 
 /**
- * Choose the best strategy based on where target_time falls in the log.
+ * Choose the best strategy based on ACTUAL log position for target timestamp.
  *
  * STRATEGY SELECTION LOGIC:
  * - FORWARD_REPLAY: Start from empty, replay all operations up to target
  * - REVERSE_DELTA:  Start from current state, undo operations after target
  *
- * IMPORTANT: We aggressively favor REVERSE_DELTA because:
- * 1. Time-based interpolation is INACCURATE when using current_time as upper bound
- *    (extends time range beyond actual log, making targets appear earlier than reality)
- * 2. Recent time travel queries are FAR more common than ancient ones
- * 3. REVERSE_DELTA only undoes operations AFTER target (usually fewer)
- * 4. FORWARD_REPLAY must apply ALL operations up to target (usually more)
+ * ALGORITHM:
+ * 1. Scan log from beginning to find ACTUAL byte offset where timestamp > target
+ * 2. Compare bytes_before_target vs bytes_after_target
+ * 3. Choose strategy with fewer bytes (= fewer operations)
  *
- * Only use FORWARD_REPLAY if target is very early in the log (first 15%).
+ * This is more accurate than time-based interpolation because it measures
+ * actual operation distribution, not assumed uniform time distribution.
  */
 TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t target_time, const std::string& db_name) {
     if (!log_manager_) {
@@ -1490,7 +1489,7 @@ TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t target_time
     LOG_INFO(LOG_COMPONENT, "ChooseStrategy: checking log file '%s' for db '%s'",
              log_path.c_str(), db_name.c_str());
 
-    LogPageReader reader(16); // Small cache for probing
+    LogPageReader reader(32); // Moderate cache for scanning
     if (!reader.Open(log_path)) {
         LOG_ERROR(LOG_COMPONENT, "ChooseStrategy: CANNOT open log file '%s' - time travel will fail!",
                   log_path.c_str());
@@ -1503,43 +1502,78 @@ TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t target_time
         return Strategy::REVERSE_DELTA; // Tiny log - either strategy is fine
     }
 
-    LOG_INFO(LOG_COMPONENT, "Strategy selection: analyzing log file (%zu bytes)", file_size);
+    LOG_INFO(LOG_COMPONENT, "Strategy selection: scanning log file (%zu bytes) to find target position", file_size);
 
-    // Use FAST time interpolation to estimate file offset (O(1))
-    // NOTE: This uses current_time as upper bound, which makes targets appear
-    // earlier than they actually are if the log hasn't been written to recently.
-    size_t target_offset = FindStartOffsetForTimestamp(reader, target_time);
+    // =========================================================================
+    // SCAN LOG TO FIND ACTUAL BYTE OFFSET FOR TARGET TIMESTAMP
+    // =========================================================================
+    // This gives us the TRUE position where operations exceed target_time,
+    // which accurately reflects operation count on each side.
+    reader.Seek(0);
+    size_t target_offset = 0;
+    size_t records_scanned = 0;
+    size_t position_before_record = 0;
+
+    LogRecord record(0, 0, LogRecordType::INVALID);
+    while (true) {
+        // Save position BEFORE reading the record
+        position_before_record = reader.Tell();
+
+        if (!ReadLogRecordFromReader(reader, record)) {
+            // Reached end of file - all records are <= target_time
+            target_offset = file_size;
+            break;
+        }
+
+        records_scanned++;
+
+        // Found first record AFTER target time - this is the split point
+        if (record.timestamp_ > target_time) {
+            target_offset = position_before_record;  // Position where this record STARTS
+            break;
+        }
+
+        // Progress logging for large logs (every 100K records)
+        if (records_scanned % 100000 == 0) {
+            LOG_DEBUG(LOG_COMPONENT, "Strategy scan: %zu records scanned...", records_scanned);
+        }
+    }
+
     reader.Close();
 
+    LOG_INFO(LOG_COMPONENT, "Strategy selection: scanned %zu records, target_offset=%zu / %zu bytes",
+             records_scanned, target_offset, file_size);
+
+    // =========================================================================
+    // COMPARE OPERATION COUNTS ON EACH SIDE
+    // =========================================================================
+    // bytes_before = operations FORWARD_REPLAY must apply
+    // bytes_after  = operations REVERSE_DELTA must undo
+    size_t bytes_before = target_offset;
+    size_t bytes_after = (file_size > target_offset) ? (file_size - target_offset) : 0;
+
+    LOG_INFO(LOG_COMPONENT, "Strategy comparison: FORWARD needs %zu bytes, REVERSE needs %zu bytes",
+             bytes_before, bytes_after);
+
     // Handle edge cases
-    if (target_offset == 0) {
-        // Target time is before or at the beginning of the log
-        LOG_INFO(LOG_COMPONENT, "Choosing FORWARD_REPLAY (target at/before log start)");
+    if (bytes_before == 0) {
+        LOG_INFO(LOG_COMPONENT, "Choosing FORWARD_REPLAY (target at/before log start - nothing to replay)");
         return Strategy::FORWARD_REPLAY;
     }
 
-    if (target_offset >= file_size) {
-        // Target time is at or after the end of the log
-        LOG_INFO(LOG_COMPONENT, "Choosing REVERSE_DELTA (target at/after log end)");
+    if (bytes_after == 0) {
+        LOG_INFO(LOG_COMPONENT, "Choosing REVERSE_DELTA (target at/after log end - nothing to undo)");
         return Strategy::REVERSE_DELTA;
     }
 
-    // Calculate position in file (0.0 = beginning, 1.0 = end)
-    // NOTE: Due to current_time upper bound, this position is UNDERESTIMATED
-    // (real position is likely higher), so we use a conservative threshold.
-    double position = static_cast<double>(target_offset) / static_cast<double>(file_size);
-
-    LOG_INFO(LOG_COMPONENT, "Strategy selection: target_offset=%zu, position=%.2f (NOTE: likely underestimated)",
-             target_offset, position);
-
-    // Use FORWARD_REPLAY ONLY if target is in the very beginning of log (first 15%)
-    // This accounts for the underestimation caused by using current_time as upper bound.
-    // For most real-world queries (recent past), REVERSE_DELTA is faster.
-    if (position < 0.15) {
-        LOG_INFO(LOG_COMPONENT, "Choosing FORWARD_REPLAY (target in first 15%% of log)");
+    // Choose strategy with FEWER operations (fewer bytes = fewer records)
+    if (bytes_before < bytes_after) {
+        LOG_INFO(LOG_COMPONENT, "Choosing FORWARD_REPLAY (%zu bytes < %zu bytes = fewer operations)",
+                 bytes_before, bytes_after);
         return Strategy::FORWARD_REPLAY;
     } else {
-        LOG_INFO(LOG_COMPONENT, "Choosing REVERSE_DELTA (target after first 15%% - favoring reverse for efficiency)");
+        LOG_INFO(LOG_COMPONENT, "Choosing REVERSE_DELTA (%zu bytes <= %zu bytes = fewer operations)",
+                 bytes_after, bytes_before);
         return Strategy::REVERSE_DELTA;
     }
 }
