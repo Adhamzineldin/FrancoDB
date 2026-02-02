@@ -1,4 +1,4 @@
-﻿[Setup]
+﻿﻿[Setup]
 AppName=ChronosDB
 AppVersion=1.0
 AppPublisher=ChronosDB Team
@@ -103,6 +103,10 @@ Root: HKCR; Subkey: "chronos\shell\open\command"; ValueType: string; ValueName: 
 Filename: "sc.exe"; Parameters: "stop ChronosDBService"; Flags: runhidden; RunOnceId: "StopService"
 Filename: "sc.exe"; Parameters: "delete ChronosDBService"; Flags: runhidden; RunOnceId: "DeleteService"
 
+[UninstallDelete]
+; Clean up any legacy FrancoDB startup entries
+Type: files; Name: "{reg:HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run,FrancoDB Server|}"
+
 
 
 [Code]
@@ -174,9 +178,14 @@ end;
 function InitializeSetup(): Boolean;
 var
   PrevPath: String;
+  ResultCode: Integer;
 begin
   Result := True;
   IsUpgrade := False;
+  
+  // Clean up any legacy FrancoDB startup entries
+  RegDeleteValue(HKEY_CURRENT_USER, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'FrancoDB Server');
+  
   if RegQueryStringValue(HKEY_LOCAL_MACHINE, 
      'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8C5E4A9B-3F2D-4B1C-9A7E-5D8F2C1B4A3E}_is1',
      'InstallLocation', PrevPath) then
