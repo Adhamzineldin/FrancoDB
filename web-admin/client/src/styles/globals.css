@@ -819,7 +819,8 @@ input::placeholder, textarea::placeholder {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  min-height: 500px;
+  height: calc(100vh - 160px);
+  min-height: 400px;
   overflow: hidden;
 }
 
@@ -902,7 +903,9 @@ input::placeholder, textarea::placeholder {
    Data Tables
    ══════════════════════════════════════════════════ */
 .data-table-wrapper {
-  overflow-x: auto;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .data-table {
@@ -956,6 +959,8 @@ input::placeholder, textarea::placeholder {
   border-top: 1px solid var(--border);
   font-size: 0.8rem;
   color: var(--text-muted);
+  flex-shrink: 0;
+  background: var(--bg-secondary);
 }
 
 .pagination-controls {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../api';
 import type { ChronosResult } from '../types';
 
@@ -13,8 +13,8 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
   const [schema, setSchema] = useState<ChronosResult | null>(null);
   const [data, setData] = useState<ChronosResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [limit, setLimit] = useState(50);
-  const [offset, setOffset] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(0);
   const [tab, setTab] = useState<'data' | 'schema'>('data');
 
   const loadTables = useCallback(async () => {
@@ -32,17 +32,27 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
     try {
       const [schemaRes, dataRes] = await Promise.all([
         api.getTableSchema(selectedTable),
-        api.getTableData(selectedTable, limit, offset),
+        api.getTableData(selectedTable),
       ]);
       setSchema(schemaRes);
       setData(dataRes);
+      setPage(0);
     } catch {} finally {
       setLoading(false);
     }
-  }, [selectedTable, limit, offset]);
+  }, [selectedTable]);
 
   useEffect(() => { loadTables(); }, [loadTables]);
   useEffect(() => { loadTableDetails(); }, [loadTableDetails]);
+
+  // Client-side pagination: slice from the full fetched rows
+  const allRows = data?.data?.rows ?? [];
+  const totalRows = data?.total_count ?? allRows.length;
+  const totalPages = Math.max(1, Math.ceil(allRows.length / pageSize));
+  const pageRows = useMemo(
+    () => allRows.slice(page * pageSize, (page + 1) * pageSize),
+    [allRows, page, pageSize]
+  );
 
   if (!currentDb) {
     return (
@@ -64,7 +74,7 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
             <button
               key={t}
               className={`tv-table-btn ${t === selectedTable ? 'active' : ''}`}
-              onClick={() => { onSelectTable(t); setOffset(0); }}
+              onClick={() => { onSelectTable(t); setPage(0); }}
             >
               {t}
             </button>
@@ -104,6 +114,11 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
 
               {tab === 'data' && data?.data && (
                 <>
+                  {data.truncated && (
+                    <div style={{ padding: '0.5rem 1rem', background: '#2d2300', color: '#f0c000', fontSize: '0.85rem', flexShrink: 0 }}>
+                      Showing first {allRows.length.toLocaleString()} of {totalRows.toLocaleString()} rows (table too large to load fully)
+                    </div>
+                  )}
                   <div className="data-table-wrapper">
                     <table className="data-table">
                       <thead>
@@ -114,14 +129,14 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
                         </tr>
                       </thead>
                       <tbody>
-                        {data.data.rows.map((row, ri) => (
-                          <tr key={ri}>
+                        {pageRows.map((row, ri) => (
+                          <tr key={page + '-' + ri}>
                             {row.map((cell, ci) => (
                               <td key={ci}>{cell}</td>
                             ))}
                           </tr>
                         ))}
-                        {data.data.rows.length === 0 && (
+                        {pageRows.length === 0 && (
                           <tr>
                             <td colSpan={data.data.columns.length} className="text-muted" style={{ textAlign: 'center' }}>
                               No data
@@ -132,16 +147,23 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
                     </table>
                   </div>
                   <div className="pagination">
-                    <span>{data.row_count ?? data.data.rows.length} rows</span>
+                    <span>
+                      {allRows.length > 0
+                        ? `${(page * pageSize + 1).toLocaleString()}\u2013${Math.min((page + 1) * pageSize, allRows.length).toLocaleString()} of ${totalRows.toLocaleString()} rows`
+                        : '0 rows'}
+                    </span>
                     <div className="pagination-controls">
                       <button
                         className="btn-sm"
-                        disabled={offset === 0}
-                        onClick={() => setOffset(Math.max(0, offset - limit))}
+                        disabled={page === 0}
+                        onClick={() => setPage(p => p - 1)}
                       >
-                        ← Previous
+                        Previous
                       </button>
-                      <select value={limit} onChange={(e) => { setLimit(+e.target.value); setOffset(0); }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                        Page {page + 1} of {totalPages}
+                      </span>
+                      <select value={pageSize} onChange={(e) => { setPageSize(+e.target.value); setPage(0); }}>
                         <option value={25}>25 rows</option>
                         <option value={50}>50 rows</option>
                         <option value={100}>100 rows</option>
@@ -149,10 +171,10 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
                       </select>
                       <button
                         className="btn-sm"
-                        disabled={!data.data.rows.length || data.data.rows.length < limit}
-                        onClick={() => setOffset(offset + limit)}
+                        disabled={page >= totalPages - 1}
+                        onClick={() => setPage(p => p + 1)}
                       >
-                        Next →
+                        Next
                       </button>
                     </div>
                   </div>

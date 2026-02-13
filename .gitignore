@@ -77,3 +77,26 @@ cmake-build-*/
 core
 valgrind.log
 gmon.out
+
+# ----------------------------------------------------------------------
+# 6. Web Admin (Node.js / React)
+# ----------------------------------------------------------------------
+# npm dependencies
+web-admin/node_modules/
+web-admin/client/node_modules/
+web-admin/server/node_modules/
+
+# React build output (served by C++ server in production)
+web-admin/server/public/
+web-admin/client/dist/
+
+# npm lock files (optional - remove these lines if you want to pin deps)
+web-admin/package-lock.json
+web-admin/client/package-lock.json
+web-admin/server/package-lock.json
+
+# ----------------------------------------------------------------------
+# 7. Documentation Outputs
+# ----------------------------------------------------------------------
+docs/*.docx
+docs/*.pdf

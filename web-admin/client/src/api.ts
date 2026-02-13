@@ -1,17 +1,31 @@
 import type { ChronosResult, UserInfo } from './types';
 
 const BASE = '/api';
+const TOKEN_KEY = 'chronos_token';
+
+function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
 
 async function request<T = ChronosResult>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    credentials: 'include',
+    headers,
   });
   if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
     throw new Error('UNAUTHORIZED');
   }
   return res.json();
@@ -19,13 +33,23 @@ async function request<T = ChronosResult>(
 
 export const api = {
   // Auth
-  login: (username: string, password: string) =>
-    request<{ success: boolean; username?: string; role?: string; error?: string }>(
-      '/login',
-      { method: 'POST', body: JSON.stringify({ username, password }) }
-    ),
+  login: async (username: string, password: string) => {
+    const result = await request<{
+      success: boolean; username?: string; role?: string;
+      token?: string; error?: string;
+    }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) });
 
-  logout: () => request('/logout', { method: 'POST' }),
+    if (result.success && result.token) {
+      localStorage.setItem(TOKEN_KEY, result.token);
+    }
+    return result;
+  },
+
+  logout: async () => {
+    const result = await request('/logout', { method: 'POST' });
+    localStorage.removeItem(TOKEN_KEY);
+    return result;
+  },
 
   me: () =>
     request<{ success: boolean } & UserInfo>('/me'),
@@ -53,8 +77,8 @@ export const api = {
 
   getTableSchema: (name: string) => request(`/tables/${name}/schema`),
 
-  getTableData: (name: string, limit = 100, offset = 0) =>
-    request(`/tables/${name}/data?limit=${limit}&offset=${offset}`),
+  getTableData: (name: string) =>
+    request(`/tables/${name}/data`),
 
   // Query
   executeQuery: (sql: string) =>

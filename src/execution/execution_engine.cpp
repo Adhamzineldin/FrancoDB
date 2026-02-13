@@ -52,18 +52,19 @@ namespace chronosdb {
 
     ExecutionEngine::ExecutionEngine(IBufferManager *bpm, Catalog *catalog,
                                      AuthManager *auth_manager, DatabaseRegistry *db_registry,
-                                     LogManager *log_manager)
+                                     LogManager *log_manager, bool manage_ai)
         : bpm_(bpm),
           catalog_(catalog),
           auth_manager_(auth_manager),
           db_registry_(db_registry),
           log_manager_(log_manager),
           exec_ctx_(nullptr),
+          manage_ai_(manage_ai),
           next_txn_id_(1) {
-        
+
         // Create LockManager for row-level locking (CONCURRENCY FIX)
         lock_manager_ = std::make_unique<LockManager>();
-        
+
         // Create executor context with LockManager
         exec_ctx_ = new ExecutorContext(bpm_, catalog_, nullptr, log_manager_, lock_manager_.get());
 
@@ -81,13 +82,17 @@ namespace chronosdb {
         // Initialize the dispatch map (OCP - Open/Closed Principle)
         InitializeDispatchMap();
 
-        // Initialize AI Layer
-        CheckpointManager* cp_mgr = nullptr; // Transient — created per-operation
-        ai::AIManager::Instance().Initialize(catalog_, bpm_, log_manager_, cp_mgr);
+        // Initialize AI Layer (only for the server's main engine, not per-request engines)
+        if (manage_ai_) {
+            CheckpointManager* cp_mgr = nullptr; // Transient — created per-operation
+            ai::AIManager::Instance().Initialize(catalog_, bpm_, log_manager_, cp_mgr);
+        }
     }
 
     ExecutionEngine::~ExecutionEngine() {
-        ai::AIManager::Instance().Shutdown();
+        if (manage_ai_) {
+            ai::AIManager::Instance().Shutdown();
+        }
         delete exec_ctx_;
     }
 

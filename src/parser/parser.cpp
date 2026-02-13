@@ -181,6 +181,10 @@ namespace chronosdb {
                 Advance();
                 if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
                 return std::make_unique<ShowTablesStatement>();
+            } else if (current_token_.type == TokenType::STATUS) {
+                Advance(); // Eat STATUS
+                if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
+                return std::make_unique<ShowStatusStatement>();
             } else if (current_token_.type == TokenType::AI) {
                 Advance(); // Eat AI
                 if (!Match(TokenType::STATUS))
@@ -199,7 +203,7 @@ namespace chronosdb {
                 return std::make_unique<ShowExecutionStatsStatement>();
             }
             throw Exception(ExceptionType::PARSER,
-                "Expected USER, DATABASES, CREATE, TABLES, AI STATUS, ANOMALIES, or EXECUTION STATS");
+                "Expected USER, DATABASES, CREATE, TABLES, STATUS, AI STATUS, ANOMALIES, or EXECUTION STATS");
         }
         // 15. DESCRIBE
         else if (current_token_.type == TokenType::DESCRIBE) {

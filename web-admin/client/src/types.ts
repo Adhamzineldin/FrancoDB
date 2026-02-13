@@ -5,6 +5,10 @@ export interface ChronosResult {
     rows: string[][];
   };
   row_count?: number;
+  total_count?: number;
+  truncated?: boolean;
+  total_rows?: number;
+  max_rows?: number;
   message?: string;
   error?: string;
 }

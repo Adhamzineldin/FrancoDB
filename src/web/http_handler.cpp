@@ -95,10 +95,6 @@ std::string HttpResponse::Serialize() const {
     oss << "HTTP/1.1 " << status_code << " " << status_text << "\r\n";
     oss << "Content-Length: " << body.size() << "\r\n";
     oss << "Connection: close\r\n";
-    oss << "Access-Control-Allow-Origin: *\r\n";
-    oss << "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n";
-    oss << "Access-Control-Allow-Headers: Content-Type\r\n";
-    oss << "Access-Control-Allow-Credentials: true\r\n";
     for (const auto& [key, val] : headers) {
         oss << key << ": " << val << "\r\n";
     }
@@ -247,6 +243,17 @@ bool HttpHandler::ReadHttpRequest(uintptr_t sock, HttpRequest& req) {
 
 void HttpHandler::HandleRequest(uintptr_t sock, const HttpRequest& req) {
     HttpResponse resp = Route(req);
+
+    // CORS: echo the request Origin (not "*") so credentials/cookies work.
+    // Using "*" with credentials: 'include' causes browsers to reject Set-Cookie.
+    auto origin_it = req.headers.find("origin");
+    if (origin_it != req.headers.end() && !origin_it->second.empty()) {
+        resp.headers["Access-Control-Allow-Origin"] = origin_it->second;
+        resp.headers["Access-Control-Allow-Credentials"] = "true";
+    }
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+
     std::string serialized = resp.Serialize();
 
     socket_t s = (socket_t)sock;
@@ -373,7 +380,8 @@ HttpResponse HttpHandler::HandleLogin(const HttpRequest& req) {
     }
 
     resp.SetJson("{\"success\":true,\"username\":\"" + JsonEscape(username) +
-                 "\",\"role\":\"" + role_str + "\"}");
+                 "\",\"role\":\"" + role_str +
+                 "\",\"token\":\"" + session_id + "\"}");
     resp.SetCookie("chronos_session", session_id, 86400);
     return resp;
 }
@@ -413,7 +421,7 @@ HttpResponse HttpHandler::HandleGetDatabases(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW DATABASES", session);
+    auto result = ExecuteSQL("SHOW DATABASES;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -426,7 +434,7 @@ HttpResponse HttpHandler::HandleUseDatabase(const HttpRequest& req) {
     std::string database = ParseJsonField(req.body, "database");
     if (database.empty()) { resp.SetError(400, "Database name required"); return resp; }
 
-    auto result = ExecuteSQL("USE " + database, session);
+    auto result = ExecuteSQL("USE " + database + ";", session);
     if (result.success) {
         session->context->current_db = database;
         session->context->role = auth_manager_->GetUserRole(session->context->current_user, database);
@@ -444,7 +452,7 @@ HttpResponse HttpHandler::HandleCreateDatabase(const HttpRequest& req) {
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
     std::string name = ParseJsonField(req.body, "name");
     if (name.empty()) { resp.SetError(400, "Database name required"); return resp; }
-    auto result = ExecuteSQL("CREATE DATABASE " + name, session);
+    auto result = ExecuteSQL("CREATE DATABASE " + name + ";", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -453,7 +461,7 @@ HttpResponse HttpHandler::HandleDropDatabase(const HttpRequest& req, const std::
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("DROP DATABASE " + db_name, session);
+    auto result = ExecuteSQL("DROP DATABASE " + db_name + ";", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -462,7 +470,7 @@ HttpResponse HttpHandler::HandleGetTables(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW TABLES", session);
+    auto result = ExecuteSQL("SHOW TABLE;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -471,7 +479,7 @@ HttpResponse HttpHandler::HandleGetTableSchema(const HttpRequest& req, const std
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("DESCRIBE " + table, session);
+    auto result = ExecuteSQL("DESCRIBE " + table + ";", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -481,25 +489,33 @@ HttpResponse HttpHandler::HandleGetTableData(const HttpRequest& req, const std::
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
 
-    // Parse limit and offset from query string
-    std::string limit = "100", offset = "0";
-    if (!req.query_string.empty()) {
-        std::istringstream qs(req.query_string);
-        std::string param;
-        while (std::getline(qs, param, '&')) {
-            size_t eq = param.find('=');
-            if (eq != std::string::npos) {
-                std::string key = param.substr(0, eq);
-                std::string val = param.substr(eq + 1);
-                if (key == "limit") limit = val;
-                if (key == "offset") offset = val;
-            }
+    // Fetch all rows (frontend handles pagination)
+    auto result = ExecuteSQL("SELECT * FROM " + table + ";", session);
+
+    // Safety cap to prevent massive JSON payloads
+    static constexpr size_t MAX_TABLE_ROWS = 10000;
+    bool truncated = false;
+    size_t total_rows = 0;
+    if (result.success && result.result_set) {
+        total_rows = result.result_set->rows.size();
+        if (total_rows > MAX_TABLE_ROWS) {
+            result.result_set->rows.resize(MAX_TABLE_ROWS);
+            truncated = true;
         }
     }
 
-    std::string sql = "SELECT * FROM " + table + " LIMIT " + limit;
-    auto result = ExecuteSQL(sql, session);
-    resp.SetJson(ResultToJson(result));
+    std::string json = ResultToJson(result);
+    if (json.size() > 2) {
+        size_t close = json.rfind('}');
+        if (close != std::string::npos) {
+            std::string extra = ",\n  \"total_count\": " + std::to_string(total_rows);
+            if (truncated) {
+                extra += ",\n  \"truncated\": true";
+            }
+            json.insert(close, extra);
+        }
+    }
+    resp.SetJson(json);
     return resp;
 }
 
@@ -512,7 +528,30 @@ HttpResponse HttpHandler::HandleQuery(const HttpRequest& req) {
     if (sql.empty()) { resp.SetError(400, "SQL query required"); return resp; }
 
     auto result = ExecuteSQL(sql, session);
-    resp.SetJson(ResultToJson(result));
+
+    // Cap results at 1000 rows to prevent browser freeze
+    static constexpr size_t MAX_WEB_ROWS = 1000;
+    bool truncated = false;
+    size_t total_rows = 0;
+    if (result.success && result.result_set) {
+        total_rows = result.result_set->rows.size();
+        if (total_rows > MAX_WEB_ROWS) {
+            result.result_set->rows.resize(MAX_WEB_ROWS);
+            truncated = true;
+        }
+    }
+
+    std::string json = ResultToJson(result);
+    if (truncated && json.size() > 2) {
+        size_t close = json.rfind('}');
+        if (close != std::string::npos) {
+            json.insert(close,
+                ",\n  \"truncated\": true,\n  \"total_rows\": " +
+                std::to_string(total_rows) +
+                ",\n  \"max_rows\": " + std::to_string(MAX_WEB_ROWS));
+        }
+    }
+    resp.SetJson(json);
     return resp;
 }
 
@@ -520,7 +559,7 @@ HttpResponse HttpHandler::HandleGetUsers(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW USERS", session);
+    auto result = ExecuteSQL("SHOW USER;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -539,7 +578,7 @@ HttpResponse HttpHandler::HandleCreateUser(const HttpRequest& req) {
     }
     if (role.empty()) role = "READONLY";
 
-    auto result = ExecuteSQL("CREATE USER '" + username + "' '" + password + "' " + role, session);
+    auto result = ExecuteSQL("CREATE USER '" + username + "' '" + password + "' " + role + ";", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -548,7 +587,7 @@ HttpResponse HttpHandler::HandleDeleteUser(const HttpRequest& req, const std::st
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("DELETE USER '" + username + "'", session);
+    auto result = ExecuteSQL("DELETE USER '" + username + "';", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -564,6 +603,7 @@ HttpResponse HttpHandler::HandleChangeRole(const HttpRequest& req, const std::st
 
     std::string sql = "ALTER USER '" + username + "' ROLE " + role;
     if (!database.empty()) sql += " IN " + database;
+    sql += ";";
     auto result = ExecuteSQL(sql, session);
     resp.SetJson(ResultToJson(result));
     return resp;
@@ -573,7 +613,7 @@ HttpResponse HttpHandler::HandleGetStatus(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW STATUS", session);
+    auto result = ExecuteSQL("SHOW STATUS;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -582,7 +622,7 @@ HttpResponse HttpHandler::HandleGetAIStatus(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW AI STATUS", session);
+    auto result = ExecuteSQL("SHOW AI STATUS;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -591,7 +631,7 @@ HttpResponse HttpHandler::HandleGetAnomalies(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW ANOMALIES", session);
+    auto result = ExecuteSQL("SHOW ANOMALIES;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -600,7 +640,7 @@ HttpResponse HttpHandler::HandleGetExecStats(const HttpRequest& req) {
     auto* session = GetSession(req);
     HttpResponse resp;
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
-    auto result = ExecuteSQL("SHOW EXECUTION STATS", session);
+    auto result = ExecuteSQL("SHOW EXECUTION STATS;", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }
@@ -690,9 +730,12 @@ For development mode: <code>npm run dev</code> from <code>web-admin/</code>
     std::string content_type = GetContentType(canonical);
     resp.SetFile(content.str(), content_type);
 
-    // Cache static assets
+    // Cache static assets (hashed filenames = safe to cache forever)
     if (relative_path.find("assets/") == 0) {
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+    } else {
+        // HTML: never cache (ensures fresh JS/CSS references after rebuild)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
     }
 
     return resp;
@@ -722,12 +765,34 @@ std::string HttpHandler::GetContentType(const std::string& path) {
 // ═══════════════════════════════════════════════════════
 
 WebSession* HttpHandler::GetSession(const HttpRequest& req) {
-    auto it = req.cookies.find("chronos_session");
-    if (it == req.cookies.end()) return nullptr;
+    std::string session_id;
+
+    // 1. Try cookie first
+    auto cookie_it = req.cookies.find("chronos_session");
+    if (cookie_it != req.cookies.end()) {
+        session_id = cookie_it->second;
+    }
+
+    // 2. Fallback: Authorization: Bearer <token> header
+    if (session_id.empty()) {
+        auto auth_it = req.headers.find("authorization");
+        if (auth_it != req.headers.end()) {
+            const std::string& val = auth_it->second;
+            if (val.size() > 7 && val.compare(0, 7, "Bearer ") == 0) {
+                session_id = val.substr(7);
+            }
+        }
+    }
+
+    if (session_id.empty()) {
+        return nullptr;
+    }
 
     std::lock_guard<std::mutex> lock(sessions_mutex_);
-    auto sit = sessions_.find(it->second);
-    if (sit == sessions_.end()) return nullptr;
+    auto sit = sessions_.find(session_id);
+    if (sit == sessions_.end()) {
+        return nullptr;
+    }
 
     sit->second->last_access = std::chrono::steady_clock::now();
     return sit->second.get();
@@ -835,8 +900,30 @@ std::string HttpHandler::ResultToJson(const ExecutionResult& result) {
 
 ExecutionResult HttpHandler::ExecuteSQL(const std::string& sql, WebSession* session) {
     try {
+        // Resolve the correct BPM and Catalog for the session's current database.
+        // Without this, DDL/DML executors use the default catalog (chronosdb)
+        // instead of the user's selected database.
+        IBufferManager* bpm = bpm_;
+        Catalog* catalog = catalog_;
+        if (registry_ && !session->context->current_db.empty()) {
+            if (auto entry = registry_->Get(session->context->current_db)) {
+                if (entry->bpm) bpm = entry->bpm.get();
+                if (entry->catalog) catalog = entry->catalog.get();
+            }
+            // Fallback to external registrations
+            if (bpm == bpm_) {
+                IBufferManager* ext_bpm = registry_->ExternalBpm(session->context->current_db);
+                if (ext_bpm) bpm = ext_bpm;
+            }
+            if (catalog == catalog_) {
+                Catalog* ext_cat = registry_->ExternalCatalog(session->context->current_db);
+                if (ext_cat) catalog = ext_cat;
+            }
+        }
+
         auto engine = std::make_unique<ExecutionEngine>(
-            bpm_, catalog_, auth_manager_, registry_, log_manager_
+            bpm, catalog, auth_manager_, registry_, log_manager_,
+            false  // manage_ai=false: don't touch AI singleton (server's main engine owns it)
         );
 
         Lexer lexer(sql);

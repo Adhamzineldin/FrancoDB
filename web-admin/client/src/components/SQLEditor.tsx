@@ -143,6 +143,11 @@ export default function SQLEditor({ currentDb }: SQLEditorProps) {
             )}
             {entry.result.data && (
               <div className="data-table-wrapper">
+                {entry.result.truncated && (
+                  <div className="warning-banner" style={{ padding: '0.5rem 1rem', background: '#2d2300', color: '#f0c000', borderBottom: '1px solid #4a3d00', fontSize: '0.85rem' }}>
+                    Result truncated: showing {entry.result.max_rows?.toLocaleString()} of {entry.result.total_rows?.toLocaleString()} rows. Add a LIMIT clause to your query.
+                  </div>
+                )}
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -169,7 +174,9 @@ export default function SQLEditor({ currentDb }: SQLEditorProps) {
                   </tbody>
                 </table>
                 <div className="result-row-count">
-                  {entry.result.row_count ?? entry.result.data.rows.length} row(s)
+                  {entry.result.truncated
+                    ? `${entry.result.max_rows?.toLocaleString()} of ${entry.result.total_rows?.toLocaleString()} row(s)`
+                    : `${(entry.result.row_count ?? entry.result.data.rows.length).toLocaleString()} row(s)`}
                 </div>
               </div>
             )}

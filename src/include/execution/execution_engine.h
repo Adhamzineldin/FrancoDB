@@ -51,8 +51,10 @@ public:
     using StatementHandler = std::function<ExecutionResult(Statement*, SessionContext*, Transaction*)>;
     
     // Accept IBufferManager for polymorphic buffer pool usage
-    ExecutionEngine(IBufferManager* bpm, Catalog* catalog, AuthManager* auth_manager, 
-                    DatabaseRegistry* db_registry, LogManager* log_manager);
+    // manage_ai: if false, skip AI singleton init/shutdown (for per-request engines)
+    ExecutionEngine(IBufferManager* bpm, Catalog* catalog, AuthManager* auth_manager,
+                    DatabaseRegistry* db_registry, LogManager* log_manager,
+                    bool manage_ai = true);
 
     ~ExecutionEngine();
 
@@ -128,6 +130,7 @@ private:
     // ========================================================================
     // SERVER STATE
     // ========================================================================
+    bool manage_ai_{true};
     std::atomic<bool> shutdown_requested_{false};
     
 public:
