@@ -1,4 +1,4 @@
-import type { ChronosResult, UserInfo } from './types';
+import type { ChronosResult, UserInfo, AIDetailedResponse } from './types';
 
 const BASE = '/api';
 const TOKEN_KEY = 'chronos_token';
@@ -110,4 +110,5 @@ export const api = {
   getAIStatus: () => request('/ai/status'),
   getAnomalies: () => request('/ai/anomalies'),
   getExecStats: () => request('/ai/stats'),
+  getAIDetailed: () => request<AIDetailedResponse>('/ai/detailed'),
 };

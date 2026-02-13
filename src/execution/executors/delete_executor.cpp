@@ -93,8 +93,9 @@ namespace chronosdb {
             }
         }
 
+        deleted_count_ = tuples_to_delete.size();
         is_finished_ = true;
-        return false;
+        return deleted_count_ > 0;
     }
 
     const Schema *DeleteExecutor::GetOutputSchema() {

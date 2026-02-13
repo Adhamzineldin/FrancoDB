@@ -116,6 +116,14 @@ std::vector<TemporalHotspot> TemporalIndexManager::GetCurrentHotspots() const {
     return current_hotspots_;
 }
 
+size_t TemporalIndexManager::GetTotalAccessCount() const {
+    return access_tracker_->GetTotalAccessCount();
+}
+
+size_t TemporalIndexManager::GetTotalSnapshotsTriggered() const {
+    return snapshot_scheduler_->GetTotalSnapshotsTriggered();
+}
+
 void TemporalIndexManager::Start() {
     active_ = true;
     periodic_task_id_ = AIScheduler::Instance().SchedulePeriodic(

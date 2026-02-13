@@ -1084,46 +1084,109 @@ input::placeholder, textarea::placeholder {
 }
 
 /* ══════════════════════════════════════════════════
-   AI Status
+   AI Dashboard
    ══════════════════════════════════════════════════ */
-.ai-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 1rem;
+
+/* Header */
+.ai-dash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
 }
 
-.ai-status-card {
+.ai-dash-title h2 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.ai-dash-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.auto-refresh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.auto-refresh-toggle input {
+  accent-color: var(--accent);
+}
+
+/* System Status Cards */
+.ai-system-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.ai-sys-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
   padding: 1.25rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  transition: border-color 0.2s;
 }
 
-.ai-status-card.active {
-  border-color: rgba(34, 197, 94, 0.3);
+.ai-sys-card.active { border-color: rgba(34, 197, 94, 0.3); }
+.ai-sys-card.inactive { border-color: rgba(239, 68, 68, 0.2); opacity: 0.65; }
+
+.ai-sys-icon {
+  font-size: 1.8rem;
+  flex-shrink: 0;
 }
 
-.ai-status-card.info {
-  border-color: rgba(59, 130, 246, 0.3);
-}
+.ai-sys-info { flex: 1; min-width: 0; }
 
-.ai-status-card.inactive {
-  border-color: rgba(239, 68, 68, 0.2);
-  opacity: 0.7;
-}
-
-.ai-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.75rem;
-}
-
-.ai-card-title {
+.ai-sys-name {
   font-weight: 600;
   font-size: 0.9rem;
+  margin-bottom: 0.15rem;
 }
 
+.ai-sys-status {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ai-sys-status.active { color: var(--green); }
+.ai-sys-status.inactive { color: var(--red); }
+
+.ai-sys-metric {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.metric-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  line-height: 1.1;
+}
+
+.metric-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Badge */
 .ai-status-badge {
   padding: 0.2rem 0.6rem;
   border-radius: 12px;
@@ -1136,49 +1199,298 @@ input::placeholder, textarea::placeholder {
 .ai-status-badge.active { background: var(--green-bg); color: var(--green); }
 .ai-status-badge.inactive { background: var(--red-bg); color: var(--red); }
 .ai-status-badge.info { background: var(--blue-bg); color: var(--blue); }
+.ai-status-badge.high { background: var(--red-bg); color: var(--red); }
+.ai-status-badge.medium { background: var(--yellow-bg); color: var(--yellow); }
 
-.ai-card-detail {
+/* Section panels */
+.ai-section { margin-bottom: 1rem; }
+.ai-section .panel-body { padding: 1.25rem; }
+
+/* Learning Engine - Progress */
+.learning-progress { margin-bottom: 1.25rem; }
+.progress-label {
   font-size: 0.8rem;
   color: var(--text-secondary);
-  line-height: 1.5;
+  margin-bottom: 0.5rem;
 }
 
-/* Architecture Cards */
-.arch-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+.progress-bar-track {
+  height: 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+/* Strategy Comparison */
+.strategy-comparison {
+  display: flex;
+  align-items: stretch;
   gap: 1rem;
+  margin-bottom: 1rem;
 }
 
-.arch-card {
-  padding: 1.25rem;
+.strategy-card {
+  flex: 1;
+  padding: 1rem;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
 
-.arch-card h4 {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 0.5rem;
-}
-
-.arch-card p {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  line-height: 1.5;
+.strategy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 0.75rem;
 }
 
-.arch-card code {
-  display: block;
+.strategy-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.preferred-badge {
+  padding: 0.15rem 0.5rem;
+  background: var(--green-bg);
+  color: var(--green);
+  border-radius: 10px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.strategy-stats .stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.stat-label { color: var(--text-secondary); }
+.stat-value { color: var(--text-primary); font-weight: 600; font-family: var(--font-mono); }
+
+.stat-bar {
+  margin-top: 0.5rem;
+  height: 6px;
+  background: var(--bg-primary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.stat-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.stat-bar-fill.seq { background: var(--blue); }
+.stat-bar-fill.idx { background: var(--accent); }
+
+.strategy-vs {
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Formula bar */
+.ai-formula {
+  margin-top: 0.75rem;
   padding: 0.5rem 0.75rem;
   background: var(--bg-primary);
   border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.ai-formula code {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   color: var(--accent);
+}
+
+/* Immune System Metrics */
+.immune-metrics, .temporal-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.immune-metric-card {
+  text-align: center;
+  padding: 0.75rem;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.immune-metric-card.warn .immune-metric-value { color: var(--yellow); }
+
+.immune-metric-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.immune-metric-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 0.2rem;
+}
+
+/* Blocked section */
+.blocked-section {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: var(--red-bg);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
+}
+
+.blocked-section h4 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--red);
+  margin-bottom: 0.5rem;
+}
+
+.blocked-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.blocked-tag {
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.blocked-tag.table-tag { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+.blocked-tag.user-tag { background: rgba(234, 179, 8, 0.15); color: var(--yellow); }
+
+/* Threshold Bar */
+.threshold-bar {
+  display: flex;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+
+.threshold-section {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.threshold-section span:last-child {
+  font-weight: 400;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  opacity: 0.8;
+}
+
+.threshold-section.normal { background: rgba(34, 197, 94, 0.08); color: var(--green); }
+.threshold-section.low { background: rgba(59, 130, 246, 0.08); color: var(--blue); }
+.threshold-section.medium { background: rgba(234, 179, 8, 0.08); color: var(--yellow); }
+.threshold-section.high { background: rgba(239, 68, 68, 0.08); color: var(--red); }
+
+/* Anomaly list */
+.anomaly-list h4, .hotspot-list h4 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.anomaly-table-wrap {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.5rem;
+}
+
+/* Severity pills */
+.severity-pill {
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.severity-pill.high { background: var(--red-bg); color: var(--red); }
+.severity-pill.medium { background: var(--yellow-bg); color: var(--yellow); }
+.severity-pill.low { background: var(--blue-bg); color: var(--blue); }
+.severity-pill.none { background: var(--bg-tertiary); color: var(--text-muted); }
+
+/* No anomalies message */
+.no-anomalies {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+}
+
+.check-icon { margin-right: 0.5rem; }
+
+/* Tasks */
+.tasks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.task-card {
+  padding: 0.75rem 1rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.task-name {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+
+.task-details {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.task-details span {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
 }
 
 /* ══════════════════════════════════════════════════

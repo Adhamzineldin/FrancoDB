@@ -137,6 +137,22 @@ std::vector<AnomalyReport> ImmuneSystem::GetRecentAnomalies(
     return anomaly_detector_->GetRecentAnomalies(max_count);
 }
 
+std::vector<std::string> ImmuneSystem::GetBlockedTables() const {
+    return response_engine_->GetBlockedTables();
+}
+
+std::vector<std::string> ImmuneSystem::GetBlockedUsers() const {
+    return response_engine_->GetBlockedUsers();
+}
+
+std::vector<std::string> ImmuneSystem::GetMonitoredTables() const {
+    return mutation_monitor_->GetMonitoredTables();
+}
+
+size_t ImmuneSystem::GetTotalAnomalies() const {
+    return anomaly_detector_->GetTotalAnomalies();
+}
+
 void ImmuneSystem::Start() {
     // Record start time for warm-up period
     start_time_us_ = std::chrono::duration_cast<std::chrono::microseconds>(

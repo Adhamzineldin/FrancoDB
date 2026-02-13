@@ -106,6 +106,7 @@ private:
     HttpResponse HandleGetAIStatus(const HttpRequest& req);
     HttpResponse HandleGetAnomalies(const HttpRequest& req);
     HttpResponse HandleGetExecStats(const HttpRequest& req);
+    HttpResponse HandleGetAIDetailed(const HttpRequest& req);
 
     // ── Static file serving ──
     HttpResponse ServeStaticFile(const std::string& path);

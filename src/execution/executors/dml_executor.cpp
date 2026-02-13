@@ -552,11 +552,8 @@ ExecutionResult DMLExecutor::Delete(DeleteStatement* stmt, Transaction* txn) {
         executor.Init();
 
         Tuple result_tuple;
-        int delete_count = 0;
-
-        while (executor.Next(&result_tuple)) {
-            delete_count++;
-        }
+        executor.Next(&result_tuple);
+        int delete_count = static_cast<int>(executor.GetDeletedCount());
 
         // AI Observer: Notify after DELETE
         auto end_us = static_cast<uint64_t>(

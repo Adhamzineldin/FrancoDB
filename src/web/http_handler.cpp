@@ -11,6 +11,12 @@
 #include "parser/lexer.h"
 #include "parser/parser.h"
 #include "ai/ai_manager.h"
+#include "ai/ai_scheduler.h"
+#include "ai/metrics_store.h"
+#include "ai/ai_config.h"
+#include "ai/learning/learning_engine.h"
+#include "ai/immune/immune_system.h"
+#include "ai/temporal/temporal_index_manager.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -28,11 +34,18 @@ typedef int socket_t;
 #include <filesystem>
 #include <random>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <mutex>
 
 namespace chronosdb {
 namespace web {
+
+// Helper: output a double value safe for JSON (inf/NaN -> 0)
+static double safe_double(double v) {
+    if (std::isinf(v) || std::isnan(v)) return 0.0;
+    return v;
+}
 
 // ── Standalone JSON escape helper ──
 static std::string json_escape(const std::string& s) {
@@ -292,6 +305,7 @@ HttpResponse HttpHandler::Route(const HttpRequest& req) {
     if (p == "/api/ai/status" && req.method == HttpMethod::GET) return HandleGetAIStatus(req);
     if (p == "/api/ai/anomalies" && req.method == HttpMethod::GET) return HandleGetAnomalies(req);
     if (p == "/api/ai/stats" && req.method == HttpMethod::GET) return HandleGetExecStats(req);
+    if (p == "/api/ai/detailed" && req.method == HttpMethod::GET) return HandleGetAIDetailed(req);
 
     // Pattern routes: /api/tables/:name/schema, /api/tables/:name/data
     if (p.rfind("/api/tables/", 0) == 0 && p.size() > 12) {
@@ -642,6 +656,148 @@ HttpResponse HttpHandler::HandleGetExecStats(const HttpRequest& req) {
     if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
     auto result = ExecuteSQL("SHOW EXECUTION STATS;", session);
     resp.SetJson(ResultToJson(result));
+    return resp;
+}
+
+HttpResponse HttpHandler::HandleGetAIDetailed(const HttpRequest& req) {
+    auto* session = GetSession(req);
+    HttpResponse resp;
+    if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
+
+    auto& ai_mgr = ai::AIManager::Instance();
+    std::ostringstream json;
+    json << std::fixed;
+    json << "{\n  \"initialized\": " << (ai_mgr.IsInitialized() ? "true" : "false");
+
+    if (!ai_mgr.IsInitialized()) {
+        json << "\n}";
+        resp.SetJson(json.str());
+        return resp;
+    }
+
+    // ── Metrics Store ──
+    auto& metrics = ai::MetricsStore::Instance();
+    json << ",\n  \"metrics_recorded\": " << metrics.GetTotalRecorded();
+
+    // ── Scheduled Tasks ──
+    auto tasks = ai::AIScheduler::Instance().GetScheduledTasks();
+    json << ",\n  \"scheduled_tasks\": [";
+    for (size_t i = 0; i < tasks.size(); i++) {
+        if (i > 0) json << ",";
+        json << "\n    {\"name\": \"" << JsonEscape(tasks[i].name)
+             << "\", \"interval_ms\": " << tasks[i].interval_ms
+             << ", \"run_count\": " << tasks[i].run_count
+             << ", \"periodic\": " << (tasks[i].periodic ? "true" : "false") << "}";
+    }
+    json << "\n  ]";
+
+    // ── Learning Engine ──
+    auto* learning = ai_mgr.GetLearningEngine();
+    json << ",\n  \"learning_engine\": {";
+    json << "\n    \"active\": " << (learning ? "true" : "false");
+    if (learning) {
+        uint64_t total_q = learning->GetTotalQueriesObserved();
+        json << ",\n    \"total_queries\": " << total_q;
+        json << ",\n    \"min_samples\": " << ai::MIN_SAMPLES_BEFORE_LEARNING;
+        json << ",\n    \"ready\": " << (total_q >= ai::MIN_SAMPLES_BEFORE_LEARNING ? "true" : "false");
+
+        auto arms = learning->GetArmStats();
+        json << ",\n    \"arms\": [";
+        for (size_t i = 0; i < arms.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\n      {\"strategy\": \""
+                 << (arms[i].strategy == ai::ScanStrategy::SEQUENTIAL_SCAN ? "Sequential Scan" : "Index Scan")
+                 << "\", \"pulls\": " << arms[i].total_pulls
+                 << ", \"avg_reward\": " << std::setprecision(4) << safe_double(arms[i].average_reward)
+                 << ", \"ucb_score\": " << std::setprecision(4) << safe_double(arms[i].ucb_score) << "}";
+        }
+        json << "\n    ]";
+        json << ",\n    \"summary\": \"" << JsonEscape(learning->GetSummary()) << "\"";
+    }
+    json << "\n  }";
+
+    // ── Immune System ──
+    auto* immune = ai_mgr.GetImmuneSystem();
+    json << ",\n  \"immune_system\": {";
+    json << "\n    \"active\": " << (immune ? "true" : "false");
+    if (immune) {
+        json << ",\n    \"total_anomalies\": " << immune->GetTotalAnomalies();
+        json << ",\n    \"check_interval_ms\": " << ai::IMMUNE_CHECK_INTERVAL_MS;
+
+        auto blocked_tables = immune->GetBlockedTables();
+        json << ",\n    \"blocked_tables\": [";
+        for (size_t i = 0; i < blocked_tables.size(); i++) {
+            if (i > 0) json << ", ";
+            json << "\"" << JsonEscape(blocked_tables[i]) << "\"";
+        }
+        json << "]";
+
+        auto blocked_users = immune->GetBlockedUsers();
+        json << ",\n    \"blocked_users\": [";
+        for (size_t i = 0; i < blocked_users.size(); i++) {
+            if (i > 0) json << ", ";
+            json << "\"" << JsonEscape(blocked_users[i]) << "\"";
+        }
+        json << "]";
+
+        auto monitored = immune->GetMonitoredTables();
+        json << ",\n    \"monitored_tables\": " << monitored.size();
+
+        json << ",\n    \"thresholds\": {\"low\": " << std::setprecision(1) << ai::ZSCORE_LOW_THRESHOLD
+             << ", \"medium\": " << ai::ZSCORE_MEDIUM_THRESHOLD
+             << ", \"high\": " << ai::ZSCORE_HIGH_THRESHOLD << "}";
+
+        auto anomalies = immune->GetRecentAnomalies(20);
+        json << ",\n    \"recent_anomalies\": [";
+        for (size_t i = 0; i < anomalies.size(); i++) {
+            if (i > 0) json << ",";
+            std::string sev;
+            switch (anomalies[i].severity) {
+                case ai::AnomalySeverity::LOW:    sev = "LOW"; break;
+                case ai::AnomalySeverity::MEDIUM: sev = "MEDIUM"; break;
+                case ai::AnomalySeverity::HIGH:   sev = "HIGH"; break;
+                default:                          sev = "NONE"; break;
+            }
+            json << "\n      {\"table\": \"" << JsonEscape(anomalies[i].table_name)
+                 << "\", \"user\": \"" << JsonEscape(anomalies[i].user)
+                 << "\", \"severity\": \"" << sev
+                 << "\", \"z_score\": " << std::setprecision(2) << safe_double(anomalies[i].z_score)
+                 << ", \"current_rate\": " << std::setprecision(2) << safe_double(anomalies[i].current_rate)
+                 << ", \"mean_rate\": " << std::setprecision(2) << safe_double(anomalies[i].mean_rate)
+                 << ", \"timestamp_us\": " << anomalies[i].timestamp_us
+                 << ", \"description\": \"" << JsonEscape(anomalies[i].description) << "\"}";
+        }
+        json << "\n    ]";
+        json << ",\n    \"summary\": \"" << JsonEscape(immune->GetSummary()) << "\"";
+    }
+    json << "\n  }";
+
+    // ── Temporal Index Manager ──
+    auto* temporal = ai_mgr.GetTemporalIndexManager();
+    json << ",\n  \"temporal_index\": {";
+    json << "\n    \"active\": " << (temporal ? "true" : "false");
+    if (temporal) {
+        json << ",\n    \"total_accesses\": " << temporal->GetTotalAccessCount();
+        json << ",\n    \"total_snapshots\": " << temporal->GetTotalSnapshotsTriggered();
+        json << ",\n    \"analysis_interval_ms\": " << ai::TEMPORAL_ANALYSIS_INTERVAL_MS;
+
+        auto hotspots = temporal->GetCurrentHotspots();
+        json << ",\n    \"hotspots\": [";
+        for (size_t i = 0; i < hotspots.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\n      {\"center_us\": " << hotspots[i].center_timestamp_us
+                 << ", \"range_start_us\": " << hotspots[i].range_start_us
+                 << ", \"range_end_us\": " << hotspots[i].range_end_us
+                 << ", \"access_count\": " << hotspots[i].access_count
+                 << ", \"density\": " << std::setprecision(2) << safe_double(hotspots[i].density) << "}";
+        }
+        json << "\n    ]";
+        json << ",\n    \"summary\": \"" << JsonEscape(temporal->GetSummary()) << "\"";
+    }
+    json << "\n  }";
+
+    json << "\n}";
+    resp.SetJson(json.str());
     return resp;
 }
 

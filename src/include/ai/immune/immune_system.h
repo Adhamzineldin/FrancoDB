@@ -47,6 +47,10 @@ public:
     // Status
     std::string GetSummary() const;
     std::vector<AnomalyReport> GetRecentAnomalies(size_t max_count = 50) const;
+    std::vector<std::string> GetBlockedTables() const;
+    std::vector<std::string> GetBlockedUsers() const;
+    std::vector<std::string> GetMonitoredTables() const;
+    size_t GetTotalAnomalies() const;
 
     // Lifecycle
     void Start();

@@ -46,6 +46,8 @@ public:
     // Status
     std::string GetSummary() const;
     std::vector<TemporalHotspot> GetCurrentHotspots() const;
+    size_t GetTotalAccessCount() const;
+    size_t GetTotalSnapshotsTriggered() const;
 
     // Lifecycle
     void Start();

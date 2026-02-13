@@ -19,6 +19,72 @@ export interface UserInfo {
   currentDb: string;
 }
 
+export interface AIArmStats {
+  strategy: string;
+  pulls: number;
+  avg_reward: number;
+  ucb_score: number;
+}
+
+export interface AIAnomaly {
+  table: string;
+  user: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'NONE';
+  z_score: number;
+  current_rate: number;
+  mean_rate: number;
+  timestamp_us: number;
+  description: string;
+}
+
+export interface AIHotspot {
+  center_us: number;
+  range_start_us: number;
+  range_end_us: number;
+  access_count: number;
+  density: number;
+}
+
+export interface AIScheduledTask {
+  name: string;
+  interval_ms: number;
+  run_count: number;
+  periodic: boolean;
+}
+
+export interface AIDetailedResponse {
+  initialized: boolean;
+  metrics_recorded?: number;
+  scheduled_tasks?: AIScheduledTask[];
+  learning_engine?: {
+    active: boolean;
+    total_queries?: number;
+    min_samples?: number;
+    ready?: boolean;
+    arms?: AIArmStats[];
+    summary?: string;
+  };
+  immune_system?: {
+    active: boolean;
+    total_anomalies?: number;
+    check_interval_ms?: number;
+    blocked_tables?: string[];
+    blocked_users?: string[];
+    monitored_tables?: number;
+    thresholds?: { low: number; medium: number; high: number };
+    recent_anomalies?: AIAnomaly[];
+    summary?: string;
+  };
+  temporal_index?: {
+    active: boolean;
+    total_accesses?: number;
+    total_snapshots?: number;
+    analysis_interval_ms?: number;
+    hotspots?: AIHotspot[];
+    summary?: string;
+  };
+}
+
 export type Page =
   | 'dashboard'
   | 'databases'
