@@ -5,7 +5,8 @@
       "Bash(find:*)",
       "Bash(cmake --build:*)",
       "Bash(ctest:*)",
-      "Bash(./test/run_all_tests.exe:*)"
+      "Bash(./test/run_all_tests.exe:*)",
+      "Bash(pip install:*)"
     ]
   }
 }
