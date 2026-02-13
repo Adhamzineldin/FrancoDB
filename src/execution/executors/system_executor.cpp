@@ -12,9 +12,16 @@
 #include "network/session_context.h"
 #include "network/database_registry.h"
 #include "common/chronos_net_config.h"
+#include "ai/ai_manager.h"
+#include "ai/learning/learning_engine.h"
+#include "ai/learning/bandit.h"
+#include "ai/immune/immune_system.h"
+#include "ai/immune/anomaly_detector.h"
 #include <filesystem>
 #include <algorithm>
 #include <set>
+#include <sstream>
+#include <iomanip>
 
 namespace chronosdb {
 
@@ -175,6 +182,118 @@ ExecutionResult SystemExecutor::WhoAmI(WhoAmIStatement* stmt, SessionContext* se
     else if (session->role == UserRole::READONLY) role_str = "READONLY";
 
     rs->AddRow({session->current_user, session->current_db, role_str});
+    return ExecutionResult::Data(rs);
+}
+
+// ============================================================================
+// SHOW AI STATUS
+// ============================================================================
+ExecutionResult SystemExecutor::ShowAIStatus(ShowAIStatusStatement* stmt) {
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names = {"Component", "Status", "Details"};
+
+    auto& ai_mgr = ai::AIManager::Instance();
+    if (!ai_mgr.IsInitialized()) {
+        rs->AddRow({"AI Layer", "INACTIVE", "Not initialized"});
+        return ExecutionResult::Data(rs);
+    }
+
+    auto status = ai_mgr.GetStatus();
+
+    rs->AddRow({"Learning Engine",
+                status.learning_engine_active ? "ACTIVE" : "INACTIVE",
+                status.learning_summary});
+
+    rs->AddRow({"Immune System",
+                status.immune_system_active ? "ACTIVE" : "INACTIVE",
+                status.immune_summary});
+
+    rs->AddRow({"Temporal Index",
+                status.temporal_index_active ? "ACTIVE" : "INACTIVE",
+                status.temporal_summary});
+
+    rs->AddRow({"Metrics Recorded", "INFO",
+                std::to_string(status.metrics_recorded) + " events"});
+
+    rs->AddRow({"Scheduled Tasks", "INFO",
+                std::to_string(status.scheduled_tasks) + " tasks"});
+
+    return ExecutionResult::Data(rs);
+}
+
+// ============================================================================
+// SHOW ANOMALIES
+// ============================================================================
+ExecutionResult SystemExecutor::ShowAnomalies(ShowAnomaliesStatement* stmt) {
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names = {"Table", "Severity", "Z-Score", "Current Rate", "Mean Rate", "Detected At"};
+
+    auto& ai_mgr = ai::AIManager::Instance();
+    if (!ai_mgr.IsInitialized() || !ai_mgr.GetImmuneSystem()) {
+        rs->AddRow({"N/A", "N/A", "N/A", "N/A", "N/A", "Immune System not active"});
+        return ExecutionResult::Data(rs);
+    }
+
+    auto anomalies = ai_mgr.GetImmuneSystem()->GetRecentAnomalies(50);
+
+    if (anomalies.empty()) {
+        rs->AddRow({"(none)", "NORMAL", "0.00", "0.00", "0.00", "No anomalies detected"});
+        return ExecutionResult::Data(rs);
+    }
+
+    for (const auto& a : anomalies) {
+        std::string severity_str;
+        switch (a.severity) {
+            case ai::AnomalySeverity::LOW:    severity_str = "LOW";    break;
+            case ai::AnomalySeverity::MEDIUM: severity_str = "MEDIUM"; break;
+            case ai::AnomalySeverity::HIGH:   severity_str = "HIGH";   break;
+            default:                          severity_str = "NONE";   break;
+        }
+
+        std::ostringstream z_oss, cr_oss, mr_oss;
+        z_oss  << std::fixed << std::setprecision(2) << a.z_score;
+        cr_oss << std::fixed << std::setprecision(2) << a.current_rate;
+        mr_oss << std::fixed << std::setprecision(2) << a.mean_rate;
+
+        rs->AddRow({a.table_name, severity_str, z_oss.str(),
+                    cr_oss.str(), mr_oss.str(), std::to_string(a.timestamp_us)});
+    }
+
+    return ExecutionResult::Data(rs);
+}
+
+// ============================================================================
+// SHOW EXECUTION STATS
+// ============================================================================
+ExecutionResult SystemExecutor::ShowExecutionStats(ShowExecutionStatsStatement* stmt) {
+    auto rs = std::make_shared<ResultSet>();
+    rs->column_names = {"Strategy", "Pulls", "Avg Reward", "UCB Score"};
+
+    auto& ai_mgr = ai::AIManager::Instance();
+    if (!ai_mgr.IsInitialized() || !ai_mgr.GetLearningEngine()) {
+        rs->AddRow({"N/A", "0", "0.00", "Learning Engine not active"});
+        return ExecutionResult::Data(rs);
+    }
+
+    auto arm_stats = ai_mgr.GetLearningEngine()->GetArmStats();
+
+    for (const auto& arm : arm_stats) {
+        std::string name = (arm.strategy == ai::ScanStrategy::SEQUENTIAL_SCAN)
+                               ? "Sequential Scan"
+                               : "Index Scan";
+
+        std::ostringstream avg_oss, ucb_oss;
+        avg_oss << std::fixed << std::setprecision(4) << arm.average_reward;
+        ucb_oss << std::fixed << std::setprecision(4) << arm.ucb_score;
+
+        rs->AddRow({name, std::to_string(arm.total_pulls),
+                    avg_oss.str(), ucb_oss.str()});
+    }
+
+    uint64_t total = ai_mgr.GetLearningEngine()->GetTotalQueriesObserved();
+    rs->AddRow({"Total Queries Observed", std::to_string(total), "", ""});
+    rs->AddRow({"Summary", ai_mgr.GetLearningEngine()->GetSummary(), "", ""});
+
     return ExecutionResult::Data(rs);
 }
 

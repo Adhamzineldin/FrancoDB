@@ -36,7 +36,12 @@
 #include "network/session_context.h"
 #include "common/exception.h"
 #include "storage/table/schema.h"
+#include "ai/dml_observer.h"
+#include "ai/ai_manager.h"
+#include "ai/learning/learning_engine.h"
+#include "ai/temporal/temporal_index_manager.h"
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 #include <set>
 
@@ -61,24 +66,44 @@ ExecutionResult DMLExecutor::Insert(InsertStatement* stmt, Transaction* txn) {
         return ExecutionResult::Error("[DML] Table not found: " + stmt->table_name_);
     }
     
+    // AI Observer: Notify before INSERT
+    ai::DMLEvent ai_event;
+    ai_event.operation = ai::DMLOperation::INSERT;
+    ai_event.table_name = stmt->table_name_;
+    ai_event.start_time_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    if (!ai::DMLObserverRegistry::Instance().NotifyBefore(ai_event)) {
+        return ExecutionResult::Error("[IMMUNE] INSERT blocked on table '" + stmt->table_name_ + "'");
+    }
+
     try {
         // Create executor context with all dependencies
         ExecutorContext ctx(bpm_, catalog_, txn, log_manager_);
-        
+
         // Create and initialize the insert executor
         InsertExecutor executor(&ctx, stmt, txn);
         executor.Init();
-        
+
         // Execute the insert
         Tuple result_tuple;
         int insert_count = 0;
-        
+
         while (executor.Next(&result_tuple)) {
             insert_count++;
         }
-        
+
+        // AI Observer: Notify after INSERT
+        auto end_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        ai_event.duration_us = end_us - ai_event.start_time_us;
+        ai_event.rows_affected = static_cast<uint32_t>(insert_count);
+        ai::DMLObserverRegistry::Instance().NotifyAfter(ai_event);
+
         return ExecutionResult::Message("INSERT " + std::to_string(insert_count));
-        
+
     } catch (const Exception& e) {
         return ExecutionResult::Error("[DML] Insert failed: " + std::string(e.what()));
     } catch (const std::exception& e) {
@@ -94,17 +119,42 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
     if (!stmt) {
         return ExecutionResult::Error("[DML] Invalid SELECT statement: null pointer");
     }
-    
+
     if (!catalog_) {
         return ExecutionResult::Error("[DML] Internal error: Catalog not initialized");
     }
-    
+
     // Validate table exists
     TableMetadata* table_info = catalog_->GetTable(stmt->table_name_);
     if (!table_info) {
         return ExecutionResult::Error("[DML] Table not found: " + stmt->table_name_);
     }
-    
+
+    // AI Observer: record SELECT start time
+    ai::DMLEvent ai_event;
+    ai_event.operation = ai::DMLOperation::SELECT;
+    ai_event.table_name = stmt->table_name_;
+    ai_event.where_clause_count = stmt->where_clause_.size();
+    ai_event.has_order_by = !stmt->order_by_.empty();
+    ai_event.has_limit = (stmt->limit_ > 0);
+    if (session) {
+        ai_event.db_name = session->current_db;
+        ai_event.user = session->current_user;
+        ai_event.session_id = session->session_id;
+    }
+    ai_event.start_time_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    // AI Temporal Index: notify on time-travel queries
+    if (stmt->as_of_timestamp_ > 0) {
+        auto& ai_mgr = ai::AIManager::Instance();
+        if (ai_mgr.IsInitialized() && ai_mgr.GetTemporalIndexManager()) {
+            ai_mgr.GetTemporalIndexManager()->OnTimeTravelQuery(
+                stmt->table_name_, stmt->as_of_timestamp_, ai_event.db_name);
+        }
+    }
+
     try {
         ExecutorContext ctx(bpm_, catalog_, txn, log_manager_);
         AbstractExecutor* executor = nullptr;
@@ -245,8 +295,39 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
         // NORMAL PATH: Use Executor (Live Table or Index Scan)
         // =================================================================
         else {
-            // Check if we can use an index scan
-            if (!stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
+            // AI Learning Engine: consult for scan strategy recommendation
+            bool ai_recommended = false;
+            {
+                auto& ai_mgr = ai::AIManager::Instance();
+                if (ai_mgr.IsInitialized() && ai_mgr.GetLearningEngine()) {
+                    ai::ScanStrategy recommended;
+                    if (ai_mgr.GetLearningEngine()->RecommendScanStrategy(
+                            stmt, stmt->table_name_, recommended)) {
+                        // AI has a recommendation — check if index exists for it
+                        if (recommended == ai::ScanStrategy::INDEX_SCAN &&
+                            !stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
+                            const auto& cond = stmt->where_clause_[0];
+                            auto indexes = catalog_->GetTableIndexes(stmt->table_name_);
+                            for (auto* idx : indexes) {
+                                if (idx->col_name_ == cond.column && idx->b_plus_tree_) {
+                                    try {
+                                        Value lookup_val(TypeId::INTEGER, std::stoi(cond.value.ToString()));
+                                        executor = new IndexScanExecutor(&ctx, stmt, idx, lookup_val, txn);
+                                        use_index = true;
+                                        ai_recommended = true;
+                                        break;
+                                    } catch (...) {}
+                                }
+                            }
+                        } else if (recommended == ai::ScanStrategy::SEQUENTIAL_SCAN) {
+                            ai_recommended = true; // AI says seq scan, skip index check
+                        }
+                    }
+                }
+            }
+
+            // Fallback: original index scan check (if AI didn't decide)
+            if (!ai_recommended && !stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
                 const auto& cond = stmt->where_clause_[0];
                 auto indexes = catalog_->GetTableIndexes(stmt->table_name_);
 
@@ -351,9 +432,18 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
         for (const auto& row : all_rows) {
             rs->AddRow(row);
         }
-        
+
+        // AI Observer: Notify after SELECT
+        auto end_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        ai_event.duration_us = end_us - ai_event.start_time_us;
+        ai_event.used_index_scan = use_index;
+        ai_event.result_row_count = static_cast<int32_t>(all_rows.size());
+        ai::DMLObserverRegistry::Instance().NotifyAfter(ai_event);
+
         return ExecutionResult::Data(rs);
-        
+
     } catch (const Exception& e) {
         return ExecutionResult::Error("[DML] Select failed: " + std::string(e.what()));
     } catch (const std::exception& e) {
@@ -369,37 +459,55 @@ ExecutionResult DMLExecutor::Update(UpdateStatement* stmt, Transaction* txn) {
     if (!stmt) {
         return ExecutionResult::Error("[DML] Invalid UPDATE statement: null pointer");
     }
-    
+
     if (!catalog_) {
         return ExecutionResult::Error("[DML] Internal error: Catalog not initialized");
     }
-    
+
     // Validate table exists
     TableMetadata* table_info = catalog_->GetTable(stmt->table_name_);
     if (!table_info) {
         return ExecutionResult::Error("[DML] Table not found: " + stmt->table_name_);
     }
-    
+
     // Validate target column exists
     int col_idx = table_info->schema_.GetColIdx(stmt->target_column_);
     if (col_idx < 0) {
         return ExecutionResult::Error("[DML] Column not found: " + stmt->target_column_);
     }
-    
+
+    // AI Observer: Notify before UPDATE
+    ai::DMLEvent ai_event;
+    ai_event.operation = ai::DMLOperation::UPDATE;
+    ai_event.table_name = stmt->table_name_;
+    ai_event.start_time_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    if (!ai::DMLObserverRegistry::Instance().NotifyBefore(ai_event)) {
+        return ExecutionResult::Error("[IMMUNE] UPDATE blocked on table '" + stmt->table_name_ + "'");
+    }
+
     try {
         ExecutorContext ctx(bpm_, catalog_, txn, log_manager_);
         UpdateExecutor executor(&ctx, stmt, txn);
         executor.Init();
-        
+
         Tuple result_tuple;
-        // Execute the update - all updates happen in one Next() call
         executor.Next(&result_tuple);
-        
-        // Get actual count from the executor
+
         int update_count = executor.GetUpdateCount();
-        
+
+        // AI Observer: Notify after UPDATE
+        auto end_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        ai_event.duration_us = end_us - ai_event.start_time_us;
+        ai_event.rows_affected = static_cast<uint32_t>(update_count);
+        ai::DMLObserverRegistry::Instance().NotifyAfter(ai_event);
+
         return ExecutionResult::Message("UPDATE " + std::to_string(update_count));
-        
+
     } catch (const Exception& e) {
         return ExecutionResult::Error("[DML] Update failed: " + std::string(e.what()));
     } catch (const std::exception& e) {
@@ -415,35 +523,51 @@ ExecutionResult DMLExecutor::Delete(DeleteStatement* stmt, Transaction* txn) {
     if (!stmt) {
         return ExecutionResult::Error("[DML] Invalid DELETE statement: null pointer");
     }
-    
+
     if (!catalog_) {
         return ExecutionResult::Error("[DML] Internal error: Catalog not initialized");
     }
-    
+
     // Validate table exists
     TableMetadata* table_info = catalog_->GetTable(stmt->table_name_);
     if (!table_info) {
         return ExecutionResult::Error("[DML] Table not found: " + stmt->table_name_);
     }
-    
-    // Check if any other table has a foreign key referencing this table
-    // (Would need to check if we're deleting referenced rows)
-    // This is a simplified check - full implementation would verify actual data
-    
+
+    // AI Observer: Notify before DELETE
+    ai::DMLEvent ai_event;
+    ai_event.operation = ai::DMLOperation::DELETE_OP;
+    ai_event.table_name = stmt->table_name_;
+    ai_event.start_time_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    if (!ai::DMLObserverRegistry::Instance().NotifyBefore(ai_event)) {
+        return ExecutionResult::Error("[IMMUNE] DELETE blocked on table '" + stmt->table_name_ + "'");
+    }
+
     try {
         ExecutorContext ctx(bpm_, catalog_, txn, log_manager_);
         DeleteExecutor executor(&ctx, stmt, txn);
         executor.Init();
-        
+
         Tuple result_tuple;
         int delete_count = 0;
-        
+
         while (executor.Next(&result_tuple)) {
             delete_count++;
         }
-        
+
+        // AI Observer: Notify after DELETE
+        auto end_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        ai_event.duration_us = end_us - ai_event.start_time_us;
+        ai_event.rows_affected = static_cast<uint32_t>(delete_count);
+        ai::DMLObserverRegistry::Instance().NotifyAfter(ai_event);
+
         return ExecutionResult::Message("DELETE " + std::to_string(delete_count));
-        
+
     } catch (const Exception& e) {
         return ExecutionResult::Error("[DML] Delete failed: " + std::string(e.what()));
     } catch (const std::exception& e) {

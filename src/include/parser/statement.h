@@ -12,7 +12,8 @@ namespace chronosdb {
         LOGIN, CREATE_USER, ALTER_USER_ROLE, DELETE_USER, SHOW_USERS, SHOW_DATABASES, SHOW_TABLES, SHOW_STATUS, WHOAMI,
         DROP_DB, CREATE_TABLE,
         DESCRIBE_TABLE, ALTER_TABLE, SHOW_CREATE_TABLE,
-        CHECKPOINT, RECOVER, STOP_SERVER
+        CHECKPOINT, RECOVER, STOP_SERVER,
+        SHOW_AI_STATUS, SHOW_ANOMALIES, SHOW_EXECUTION_STATS
     };
 
     enum class LogicType { NONE, AND, OR };
@@ -298,5 +299,22 @@ namespace chronosdb {
     public:
         StatementType GetType() const override { return StatementType::STOP_SERVER; }
     };
-    
+
+    // --- AI LAYER COMMANDS ---
+
+    class ShowAIStatusStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_AI_STATUS; }
+    };
+
+    class ShowAnomaliesStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_ANOMALIES; }
+    };
+
+    class ShowExecutionStatsStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::SHOW_EXECUTION_STATS; }
+    };
+
 } // namespace chronosdb

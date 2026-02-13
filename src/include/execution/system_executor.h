@@ -13,6 +13,9 @@ class ShowTablesStatement;
 class ShowStatusStatement;
 class ShowUsersStatement;
 class WhoAmIStatement;
+class ShowAIStatusStatement;
+class ShowAnomaliesStatement;
+class ShowExecutionStatsStatement;
 class SessionContext;
 class DatabaseRegistry;
 
@@ -62,6 +65,14 @@ public:
      * Show current user information.
      */
     ExecutionResult WhoAmI(WhoAmIStatement* stmt, SessionContext* session);
+
+    // ========================================================================
+    // AI LAYER INTROSPECTION
+    // ========================================================================
+
+    ExecutionResult ShowAIStatus(ShowAIStatusStatement* stmt);
+    ExecutionResult ShowAnomalies(ShowAnomaliesStatement* stmt);
+    ExecutionResult ShowExecutionStats(ShowExecutionStatsStatement* stmt);
 
 private:
     Catalog* catalog_;

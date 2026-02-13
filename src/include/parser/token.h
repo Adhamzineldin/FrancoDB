@@ -143,6 +143,12 @@ namespace chronosdb {
         AS,         // "AS" / "K" - for AS OF queries
         OF,         // "OF" / "MEN" - for AS OF queries
         
+        // --- AI LAYER ---
+        AI,         // "AI" / "ZAKA2" - for SHOW AI STATUS
+        ANOMALIES,  // "ANOMALIES" / "SHOZOOZ" - for SHOW ANOMALIES
+        EXECUTION,  // "EXECUTION" / "TANFEEZ" - for SHOW EXECUTION STATS
+        STATS,      // "STATS" / "E7SA2EYAT" - for SHOW EXECUTION STATS
+
         // --- SERVER CONTROL ---
         STOP,       // "STOP" / "WA2AF" - stop server
         SHUTDOWN    // "SHUTDOWN" - shutdown server

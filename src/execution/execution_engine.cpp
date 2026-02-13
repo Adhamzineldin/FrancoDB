@@ -31,6 +31,9 @@
 #include "recovery/recovery_manager.h"
 #include "recovery/time_travel_engine.h"
 
+// AI Layer
+#include "ai/ai_manager.h"
+
 // Common
 #include "common/exception.h"
 
@@ -77,9 +80,14 @@ namespace chronosdb {
 
         // Initialize the dispatch map (OCP - Open/Closed Principle)
         InitializeDispatchMap();
+
+        // Initialize AI Layer
+        CheckpointManager* cp_mgr = nullptr; // Transient — created per-operation
+        ai::AIManager::Instance().Initialize(catalog_, bpm_, log_manager_, cp_mgr);
     }
 
     ExecutionEngine::~ExecutionEngine() {
+        ai::AIManager::Instance().Shutdown();
         delete exec_ctx_;
     }
 
@@ -199,6 +207,19 @@ namespace chronosdb {
             return ExecuteRecover(dynamic_cast<RecoverStatement *>(s));
         };
         
+        // ----- AI LAYER -----
+        dispatch_map_[StatementType::SHOW_AI_STATUS] = [this](Statement *s, SessionContext *ctx, Transaction *t) {
+            return system_executor_->ShowAIStatus(dynamic_cast<ShowAIStatusStatement *>(s));
+        };
+
+        dispatch_map_[StatementType::SHOW_ANOMALIES] = [this](Statement *s, SessionContext *ctx, Transaction *t) {
+            return system_executor_->ShowAnomalies(dynamic_cast<ShowAnomaliesStatement *>(s));
+        };
+
+        dispatch_map_[StatementType::SHOW_EXECUTION_STATS] = [this](Statement *s, SessionContext *ctx, Transaction *t) {
+            return system_executor_->ShowExecutionStats(dynamic_cast<ShowExecutionStatsStatement *>(s));
+        };
+
         // ----- SERVER CONTROL -----
         dispatch_map_[StatementType::STOP_SERVER] = [this](Statement *s, SessionContext *ctx, Transaction *t) {
             return ExecuteStopServer(ctx);

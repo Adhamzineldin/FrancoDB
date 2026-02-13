@@ -363,6 +363,18 @@ namespace chronosdb {
         {"TAZAYED",        TokenType::AUTO_INCREMENT},  // Franco: "tazayed" = increment
         
         // =====================================================================
+        // AI LAYER
+        // =====================================================================
+        {"AI",         TokenType::AI},
+        {"ZAKA2",      TokenType::AI},           // Franco: "zaka2" = intelligence
+        {"ANOMALIES",  TokenType::ANOMALIES},
+        {"SHOZOOZ",    TokenType::ANOMALIES},    // Franco: "shozooz" = anomalies
+        {"EXECUTION",  TokenType::EXECUTION},
+        {"TANFEEZ",    TokenType::EXECUTION},    // Franco: "tanfeez" = execution
+        {"STATS",      TokenType::STATS},
+        {"E7SA2EYAT",  TokenType::STATS},        // Franco: "e7sa2eyat" = statistics
+
+        // =====================================================================
         // SERVER CONTROL
         // =====================================================================
         {"STOP",       TokenType::STOP},
@@ -582,7 +594,13 @@ namespace chronosdb {
             case TokenType::OF:         return "OF";
             case TokenType::STOP:       return "STOP";
             case TokenType::SHUTDOWN:   return "SHUTDOWN";
-            
+
+            // AI Layer
+            case TokenType::AI:         return "AI";
+            case TokenType::ANOMALIES:  return "ANOMALIES";
+            case TokenType::EXECUTION:  return "EXECUTION";
+            case TokenType::STATS:      return "STATS";
+
             // GROUP BY & Aggregates
             case TokenType::GROUP: return "GROUP";
             case TokenType::BY: return "BY";

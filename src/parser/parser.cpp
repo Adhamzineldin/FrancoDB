@@ -181,8 +181,25 @@ namespace chronosdb {
                 Advance();
                 if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
                 return std::make_unique<ShowTablesStatement>();
+            } else if (current_token_.type == TokenType::AI) {
+                Advance(); // Eat AI
+                if (!Match(TokenType::STATUS))
+                    throw Exception(ExceptionType::PARSER, "Expected STATUS after AI");
+                if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
+                return std::make_unique<ShowAIStatusStatement>();
+            } else if (current_token_.type == TokenType::ANOMALIES) {
+                Advance(); // Eat ANOMALIES
+                if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
+                return std::make_unique<ShowAnomaliesStatement>();
+            } else if (current_token_.type == TokenType::EXECUTION) {
+                Advance(); // Eat EXECUTION
+                if (!Match(TokenType::STATS))
+                    throw Exception(ExceptionType::PARSER, "Expected STATS after EXECUTION");
+                if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
+                return std::make_unique<ShowExecutionStatsStatement>();
             }
-            throw Exception(ExceptionType::PARSER, "Expected USER, DATABASES, CREATE, or TABLES");
+            throw Exception(ExceptionType::PARSER,
+                "Expected USER, DATABASES, CREATE, TABLES, AI STATUS, ANOMALIES, or EXECUTION STATS");
         }
         // 15. DESCRIBE
         else if (current_token_.type == TokenType::DESCRIBE) {
