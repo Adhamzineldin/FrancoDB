@@ -76,21 +76,34 @@ namespace chronosdb {
             http_handler_ = std::make_unique<web::HttpHandler>(
                 bpm_, catalog_, auth_manager_.get(), registry_.get(), log_manager_
             );
-            // Look for React build in web-admin/client/dist or web-admin/server/public
+            // Look for React build in multiple candidate directories
             auto& cfg = ConfigManager::GetInstance();
             namespace fs = std::filesystem;
             fs::path exe_dir = fs::path(cfg.GetDataDirectory()).parent_path();
+            bool found_web = false;
             for (const auto& candidate : {
+                // Same directory as executable
                 exe_dir / "web-admin" / "server" / "public",
                 exe_dir / "web-admin" / "client" / "dist",
+                // Parent of executable (project root when running from build/)
+                exe_dir / ".." / "web-admin" / "server" / "public",
+                exe_dir / ".." / "web-admin" / "client" / "dist",
+                // Relative to CWD
                 fs::path("web-admin") / "server" / "public",
                 fs::path("web-admin") / "client" / "dist",
+                fs::path("..") / "web-admin" / "server" / "public",
+                fs::path("..") / "web-admin" / "client" / "dist",
             }) {
                 if (fs::exists(candidate / "index.html")) {
                     http_handler_->SetWebRoot(fs::canonical(candidate).string());
                     std::cout << "[WEB] Serving web admin from: " << fs::canonical(candidate).string() << std::endl;
+                    found_web = true;
                     break;
                 }
+            }
+            if (!found_web) {
+                std::cout << "[WEB] No React build found. Run 'cd web-admin/client && npm install && npm run build'" << std::endl;
+                std::cout << "[WEB] Fallback page will be served at http://localhost:2501/" << std::endl;
             }
             std::cout << "[WEB] HTTP web admin interface enabled on same port" << std::endl;
 

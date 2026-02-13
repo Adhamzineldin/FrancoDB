@@ -24,8 +24,9 @@ std::vector<AnomalyReport> AnomalyDetector::Analyze(
         auto historical = monitor.GetHistoricalRates(
             table, MUTATION_WINDOW_SIZE, RATE_INTERVAL_US);
 
-        // Need at least a few intervals to compute meaningful z-score
-        if (historical.size() < 5) continue;
+        // Need sufficient historical intervals for a meaningful z-score.
+        // Too few intervals produce unstable baselines and false positives.
+        if (historical.size() < 10) continue;
 
         double z = ComputeZScore(current_rate, historical);
         AnomalySeverity severity = Classify(z);
@@ -126,9 +127,13 @@ double AnomalyDetector::ComputeZScore(
     double variance = sq_sum / static_cast<double>(historical_values.size());
     double stddev = std::sqrt(variance);
 
-    // Avoid division by zero: if stddev is tiny, any deviation is significant
+    // Avoid division by zero when stddev is near zero.
+    // When both mean and stddev are tiny, the system is in a quiet/idle state.
+    // Only flag as anomalous if the current rate is meaningfully high in
+    // absolute terms (>= 1.0 mutations/sec), not just relatively different.
     if (stddev < 0.001) {
-        return (current_value - mean > 0.001) ? ZSCORE_HIGH_THRESHOLD + 1.0 : 0.0;
+        if (current_value - mean < 1.0) return 0.0; // Not a meaningful spike
+        return ZSCORE_HIGH_THRESHOLD + 1.0;
     }
 
     return (current_value - mean) / stddev;

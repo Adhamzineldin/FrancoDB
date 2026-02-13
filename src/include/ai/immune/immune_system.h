@@ -60,6 +60,7 @@ private:
 
     TaskId periodic_task_id_{0};
     std::atomic<bool> active_{false};
+    uint64_t start_time_us_{0}; // For warm-up period tracking
 };
 
 } // namespace ai

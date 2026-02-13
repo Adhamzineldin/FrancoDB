@@ -55,6 +55,51 @@ void TestRecovery();
 void TestTimeTravel();
 void TestCheckpoint();
 
+// AI Module Tests - MetricsStore
+void TestMetricsStoreBasicRecording();
+void TestMetricsStoreCountEvents();
+void TestMetricsStoreMutationCount();
+void TestMetricsStoreConcurrentAccess();
+void TestMetricsStoreRingBufferOverflow();
+
+// AI Module Tests - DML Observer
+void TestDMLObserverRegistration();
+void TestDMLObserverNotification();
+void TestDMLObserverBlocking();
+void TestDMLObserverMultipleObservers();
+
+// AI Module Tests - UCB1 Bandit
+void TestUCB1BanditInitialState();
+void TestUCB1BanditRewardRecording();
+void TestUCB1BanditStrategySelection();
+void TestUCB1BanditPerTableContextual();
+void TestUCB1BanditExplorationPhase();
+void TestUCB1BanditReset();
+
+// AI Module Tests - Anomaly Detection
+void TestAnomalySeverityClassification();
+void TestAnomalySeverityToString();
+void TestAnomalyDetectorRecording();
+void TestMutationMonitorBasic();
+void TestMutationMonitorHistoricalRates();
+void TestUserBehaviorProfiler();
+
+// AI Module Tests - Hotspot Detection
+void TestTemporalAccessTrackerBasic();
+void TestTemporalAccessTrackerHotTimestamps();
+void TestTemporalAccessTrackerFrequencyHistogram();
+void TestHotspotDetectorDBSCAN();
+void TestHotspotDetectorNoHotspots();
+void TestHotspotDetectorCUSUM();
+void TestHotspotDetectorSingleCluster();
+
+// AI Module Tests - Scheduler
+void TestAISchedulerLifecycle();
+void TestAISchedulerPeriodicTask();
+void TestAISchedulerOneShotTask();
+void TestAISchedulerTaskListing();
+void TestAISchedulerCancellation();
+
 int main(int, char**) {
     using namespace chronosdb_test;
     
@@ -125,6 +170,57 @@ int main(int, char**) {
     runner.RunTest("System", "Time Travel Test", [] { TestTimeTravel(); });
     runner.RunTest("System", "Time Travel Test", [] { TestCheckpoint(); });
 
+
+    // AI MODULE - METRICS STORE
+    std::cout << "\n╔═══ AI: METRICS STORE ═══╗" << std::endl;
+    runner.RunTest("AI-Metrics", "Basic Recording", [] { TestMetricsStoreBasicRecording(); });
+    runner.RunTest("AI-Metrics", "Count Events", [] { TestMetricsStoreCountEvents(); });
+    runner.RunTest("AI-Metrics", "Mutation Count", [] { TestMetricsStoreMutationCount(); });
+    runner.RunTest("AI-Metrics", "Concurrent Access", [] { TestMetricsStoreConcurrentAccess(); });
+    runner.RunTest("AI-Metrics", "Ring Buffer Overflow", [] { TestMetricsStoreRingBufferOverflow(); });
+
+    // AI MODULE - DML OBSERVER
+    std::cout << "\n╔═══ AI: DML OBSERVER ═══╗" << std::endl;
+    runner.RunTest("AI-Observer", "Registration", [] { TestDMLObserverRegistration(); });
+    runner.RunTest("AI-Observer", "Notification", [] { TestDMLObserverNotification(); });
+    runner.RunTest("AI-Observer", "Blocking", [] { TestDMLObserverBlocking(); });
+    runner.RunTest("AI-Observer", "Multiple Observers", [] { TestDMLObserverMultipleObservers(); });
+
+    // AI MODULE - UCB1 BANDIT (Self-Learning Engine)
+    std::cout << "\n╔═══ AI: UCB1 BANDIT ═══╗" << std::endl;
+    runner.RunTest("AI-Bandit", "Initial State", [] { TestUCB1BanditInitialState(); });
+    runner.RunTest("AI-Bandit", "Reward Recording", [] { TestUCB1BanditRewardRecording(); });
+    runner.RunTest("AI-Bandit", "Strategy Selection", [] { TestUCB1BanditStrategySelection(); });
+    runner.RunTest("AI-Bandit", "Per-Table Contextual", [] { TestUCB1BanditPerTableContextual(); });
+    runner.RunTest("AI-Bandit", "Exploration Phase", [] { TestUCB1BanditExplorationPhase(); });
+    runner.RunTest("AI-Bandit", "Reset", [] { TestUCB1BanditReset(); });
+
+    // AI MODULE - ANOMALY DETECTION (Immune System)
+    std::cout << "\n╔═══ AI: ANOMALY DETECTION ═══╗" << std::endl;
+    runner.RunTest("AI-Immune", "Severity Classification", [] { TestAnomalySeverityClassification(); });
+    runner.RunTest("AI-Immune", "Severity ToString", [] { TestAnomalySeverityToString(); });
+    runner.RunTest("AI-Immune", "Anomaly Recording", [] { TestAnomalyDetectorRecording(); });
+    runner.RunTest("AI-Immune", "Mutation Monitor", [] { TestMutationMonitorBasic(); });
+    runner.RunTest("AI-Immune", "Historical Rates", [] { TestMutationMonitorHistoricalRates(); });
+    runner.RunTest("AI-Immune", "User Behavior Profiler", [] { TestUserBehaviorProfiler(); });
+
+    // AI MODULE - TEMPORAL HOTSPOT DETECTION
+    std::cout << "\n╔═══ AI: TEMPORAL HOTSPOT ═══╗" << std::endl;
+    runner.RunTest("AI-Temporal", "Access Tracker Basic", [] { TestTemporalAccessTrackerBasic(); });
+    runner.RunTest("AI-Temporal", "Hot Timestamps", [] { TestTemporalAccessTrackerHotTimestamps(); });
+    runner.RunTest("AI-Temporal", "Frequency Histogram", [] { TestTemporalAccessTrackerFrequencyHistogram(); });
+    runner.RunTest("AI-Temporal", "DBSCAN Clustering", [] { TestHotspotDetectorDBSCAN(); });
+    runner.RunTest("AI-Temporal", "No Hotspots", [] { TestHotspotDetectorNoHotspots(); });
+    runner.RunTest("AI-Temporal", "CUSUM Change Points", [] { TestHotspotDetectorCUSUM(); });
+    runner.RunTest("AI-Temporal", "Single Cluster", [] { TestHotspotDetectorSingleCluster(); });
+
+    // AI MODULE - SCHEDULER
+    std::cout << "\n╔═══ AI: SCHEDULER ═══╗" << std::endl;
+    runner.RunTest("AI-Scheduler", "Lifecycle", [] { TestAISchedulerLifecycle(); });
+    runner.RunTest("AI-Scheduler", "Periodic Task", [] { TestAISchedulerPeriodicTask(); });
+    runner.RunTest("AI-Scheduler", "One-Shot Task", [] { TestAISchedulerOneShotTask(); });
+    runner.RunTest("AI-Scheduler", "Task Listing", [] { TestAISchedulerTaskListing(); });
+    runner.RunTest("AI-Scheduler", "Cancellation", [] { TestAISchedulerCancellation(); });
 
     // INTEGRATION
     std::cout << "\n╔═══ INTEGRATION ═══╗" << std::endl;

@@ -6,10 +6,26 @@
 #include "ai/metrics_store.h"
 #include "common/logger.h"
 
+#include <chrono>
 #include <sstream>
 
 namespace chronosdb {
 namespace ai {
+
+// System/internal tables that should not be monitored by the Immune System.
+// These are modified during normal startup, auth, and catalog operations.
+static bool IsSystemTable(const std::string& table_name) {
+    // Internal tables start with "chronos_" (e.g. chronos_users, chronos_databases)
+    if (table_name.size() >= 8 && table_name.compare(0, 8, "chronos_") == 0) return true;
+    // System catalog tables
+    if (table_name == "sys_tables" || table_name == "sys_columns" ||
+        table_name == "sys_indexes") return true;
+    return false;
+}
+
+// Warm-up period: collect baseline data before triggering any responses.
+// This prevents false positives from startup mutations.
+static constexpr uint64_t WARMUP_PERIOD_US = 30ULL * 1000000; // 30 seconds
 
 ImmuneSystem::ImmuneSystem(LogManager* log_manager, Catalog* catalog,
                             IBufferManager* bpm,
@@ -30,6 +46,9 @@ bool ImmuneSystem::OnBeforeDML(const DMLEvent& event) {
     // Only check mutations (INSERT/UPDATE/DELETE), not SELECT
     if (event.operation == DMLOperation::SELECT) return true;
 
+    // Never block system tables - they are managed by the engine
+    if (IsSystemTable(event.table_name)) return true;
+
     // Check if table is blocked
     if (response_engine_->IsTableBlocked(event.table_name)) {
         return false; // Block the operation
@@ -45,6 +64,9 @@ bool ImmuneSystem::OnBeforeDML(const DMLEvent& event) {
 
 void ImmuneSystem::OnAfterDML(const DMLEvent& event) {
     if (!active_.load()) return;
+
+    // Skip system tables entirely - don't even record their mutations
+    if (IsSystemTable(event.table_name)) return;
 
     // Record mutation events
     if (event.operation != DMLOperation::SELECT) {
@@ -80,6 +102,14 @@ void ImmuneSystem::OnAfterDML(const DMLEvent& event) {
 void ImmuneSystem::PeriodicAnalysis() {
     if (!active_.load()) return;
 
+    // Warm-up guard: don't trigger responses until we have enough baseline data.
+    // This prevents false positives from startup/restore mutations.
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+    if (now_us - start_time_us_ < WARMUP_PERIOD_US) {
+        return; // Still collecting baseline, skip analysis
+    }
+
     auto reports = anomaly_detector_->Analyze(*mutation_monitor_,
                                                *user_profiler_);
     for (const auto& report : reports) {
@@ -108,6 +138,10 @@ std::vector<AnomalyReport> ImmuneSystem::GetRecentAnomalies(
 }
 
 void ImmuneSystem::Start() {
+    // Record start time for warm-up period
+    start_time_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
     active_ = true;
     periodic_task_id_ = AIScheduler::Instance().SchedulePeriodic(
         "ImmuneSystem::PeriodicAnalysis",
@@ -117,7 +151,8 @@ void ImmuneSystem::Start() {
              "(z-score thresholds: LOW=" +
              std::to_string(ZSCORE_LOW_THRESHOLD) + ", MEDIUM=" +
              std::to_string(ZSCORE_MEDIUM_THRESHOLD) + ", HIGH=" +
-             std::to_string(ZSCORE_HIGH_THRESHOLD) + ")");
+             std::to_string(ZSCORE_HIGH_THRESHOLD) +
+             ", warmup=" + std::to_string(WARMUP_PERIOD_US / 1000000) + "s)");
 }
 
 void ImmuneSystem::Stop() {
