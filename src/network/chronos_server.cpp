@@ -72,6 +72,28 @@ namespace chronosdb {
             std::cout << "[CheckpointManager] Initialized with master record: data/system/master_record" << std::endl;
             std::cout << "[CheckpointManager] Operation-based checkpoints every 1000 operations" << std::endl;
 
+            // Web Admin HTTP Handler
+            http_handler_ = std::make_unique<web::HttpHandler>(
+                bpm_, catalog_, auth_manager_.get(), registry_.get(), log_manager_
+            );
+            // Look for React build in web-admin/client/dist or web-admin/server/public
+            auto& cfg = ConfigManager::GetInstance();
+            namespace fs = std::filesystem;
+            fs::path exe_dir = fs::path(cfg.GetDataDirectory()).parent_path();
+            for (const auto& candidate : {
+                exe_dir / "web-admin" / "server" / "public",
+                exe_dir / "web-admin" / "client" / "dist",
+                fs::path("web-admin") / "server" / "public",
+                fs::path("web-admin") / "client" / "dist",
+            }) {
+                if (fs::exists(candidate / "index.html")) {
+                    http_handler_->SetWebRoot(fs::canonical(candidate).string());
+                    std::cout << "[WEB] Serving web admin from: " << fs::canonical(candidate).string() << std::endl;
+                    break;
+                }
+            }
+            std::cout << "[WEB] HTTP web admin interface enabled on same port" << std::endl;
+
             // Thread Pool
             unsigned int cores = std::thread::hardware_concurrency();
             int pool_size = (cores > 0) ? cores : 4;
@@ -516,18 +538,43 @@ namespace chronosdb {
     }
 
 
+    void ChronosServer::HandleHttpClient(uintptr_t client_socket) {
+        socket_t sock = (socket_t) client_socket;
+
+        // Handle HTTP request-response (one request per connection for simplicity)
+        web::HttpRequest req;
+        if (web::HttpHandler::ReadHttpRequest(client_socket, req)) {
+            http_handler_->HandleRequest(client_socket, req);
+        }
+
+#ifdef _WIN32
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+    }
+
     void ChronosServer::HandleClient(uintptr_t client_socket) {
         socket_t sock = (socket_t) client_socket;
-        
+
+        // ── Peek at first bytes to detect HTTP vs ChronosDB protocol ──
+        char peek_buf[4];
+        int peek_n = recv(sock, peek_buf, sizeof(peek_buf), MSG_PEEK);
+        if (peek_n >= 3 && web::HttpHandler::IsHttpRequest(peek_buf, peek_n)) {
+            // Route to HTTP handler (web admin interface)
+            HandleHttpClient(client_socket);
+            return;
+        }
+
         // [FIX] Pass log_manager_ to ExecutionEngine
         auto engine = std::make_unique<ExecutionEngine>(
-            bpm_, 
-            catalog_, 
-            auth_manager_.get(), 
+            bpm_,
+            catalog_,
+            auth_manager_.get(),
             registry_.get(),
             log_manager_
         );
-        
+
         auto handler = std::make_unique<ClientConnectionHandler>(engine.release(), auth_manager_.get());
 
         while (running_.load()) {

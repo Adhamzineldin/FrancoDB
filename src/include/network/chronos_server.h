@@ -21,6 +21,7 @@
 #include "parser/parser.h" // Ensure you have this for StatementType
 #include "recovery/log_manager.h"
 #include "recovery/checkpoint_manager.h"
+#include "web/http_handler.h"
 
 namespace chronosdb {
 
@@ -44,6 +45,7 @@ namespace chronosdb {
     private:
         void InitializeSystemResources();
         void HandleClient(uintptr_t client_socket);
+        void HandleHttpClient(uintptr_t client_socket);
         void AutoSaveLoop();
         
         // [FIX] New Dispatcher to route System vs Data commands
@@ -63,6 +65,9 @@ namespace chronosdb {
         
         // Checkpoint Manager - persistent for operation-based checkpointing
         std::unique_ptr<CheckpointManager> checkpoint_mgr_;
+
+        // Web Admin HTTP Handler
+        std::unique_ptr<web::HttpHandler> http_handler_;
 
         // [FIX] Thread Pool replaces the raw thread map
         std::unique_ptr<ThreadPool> thread_pool_;

@@ -6,7 +6,10 @@
       "Bash(cmake --build:*)",
       "Bash(ctest:*)",
       "Bash(./test/run_all_tests.exe:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(python3 -m pip list:*)",
+      "Bash(python3:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

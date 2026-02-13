@@ -1,16 +1,26 @@
 """
 Generate professionally styled Word document for ChronosDB Full System Documentation.
 Parses the Markdown file and converts it to a styled .docx.
+Includes PlantUML diagram rendering via the PlantUML web service.
 """
 
 import os
 import re
+import zlib
+import tempfile
 from docx import Document
 from docx.shared import Inches, Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import nsdecls
 from docx.oxml import parse_xml
+
+try:
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+    HAS_URLLIB = True
+except ImportError:
+    HAS_URLLIB = False
 
 # ── Color Palette ──────────────────────────────────────────────────
 PRIMARY      = RGBColor(0x1A, 0x56, 0xDB)
@@ -19,6 +29,107 @@ DARK         = RGBColor(0x1F, 0x29, 0x37)
 MEDIUM       = RGBColor(0x4B, 0x55, 0x63)
 LIGHT_TEXT   = RGBColor(0x6B, 0x72, 0x80)
 WHITE        = RGBColor(0xFF, 0xFF, 0xFF)
+
+
+# ── PlantUML Rendering ────────────────────────────────────────────
+def _encode6bit(b):
+    if b < 10: return chr(48 + b)
+    b -= 10
+    if b < 26: return chr(65 + b)
+    b -= 26
+    if b < 26: return chr(97 + b)
+    b -= 26
+    if b == 0: return '-'
+    if b == 1: return '_'
+    return '?'
+
+def plantuml_encode(text):
+    """Encode PlantUML text for the web service URL."""
+    compressed = zlib.compress(text.encode('utf-8'))
+    compressed = compressed[2:-4]  # Strip zlib header/checksum
+    result = ''
+    i = 0
+    while i < len(compressed):
+        if i + 2 < len(compressed):
+            b1, b2, b3 = compressed[i], compressed[i+1], compressed[i+2]
+            result += _encode6bit(b1 >> 2)
+            result += _encode6bit(((b1 & 0x3) << 4) | (b2 >> 4))
+            result += _encode6bit(((b2 & 0xF) << 2) | (b3 >> 6))
+            result += _encode6bit(b3 & 0x3F)
+        elif i + 1 < len(compressed):
+            b1, b2 = compressed[i], compressed[i+1]
+            result += _encode6bit(b1 >> 2)
+            result += _encode6bit(((b1 & 0x3) << 4) | (b2 >> 4))
+            result += _encode6bit((b2 & 0xF) << 2)
+        else:
+            b1 = compressed[i]
+            result += _encode6bit(b1 >> 2)
+            result += _encode6bit((b1 & 0x3) << 4)
+        i += 3
+    return result
+
+def render_plantuml(text, output_dir, retries=3):
+    """Render PlantUML text to a PNG image file. Returns path or None."""
+    if not HAS_URLLIB:
+        return None
+    import time
+    for attempt in range(retries):
+        try:
+            if attempt > 0:
+                time.sleep(2 * attempt)
+            encoded = plantuml_encode(text)
+            url = f'http://www.plantuml.com/plantuml/png/{encoded}'
+            req = Request(url, headers={'User-Agent': 'ChronosDB-DocGen/1.0'})
+            response = urlopen(req, timeout=30)
+            img_data = response.read()
+            if len(img_data) < 100:
+                continue
+            fd, path = tempfile.mkstemp(suffix='.png', dir=output_dir)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(img_data)
+            return path
+        except Exception as e:
+            print(f'  [WARN] PlantUML render attempt {attempt + 1} failed: {e}')
+            if attempt == retries - 1:
+                return None
+    return None
+
+def add_plantuml_diagram(doc, plantuml_text, output_dir):
+    """Render and add a PlantUML diagram as an image to the document."""
+    img_path = render_plantuml(plantuml_text, output_dir)
+    if img_path:
+        try:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.add_run()
+            run.add_picture(img_path, width=Inches(6.0))
+            print(f'  [OK] Embedded PlantUML diagram as image')
+            try:
+                os.remove(img_path)
+            except:
+                pass
+            return True
+        except Exception as e:
+            print(f'  [WARN] Failed to embed image: {e}')
+            try:
+                os.remove(img_path)
+            except:
+                pass
+    # Fallback: add as styled code block with diagram label
+    label = doc.add_paragraph()
+    label.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = label.add_run('\u25bc UML Diagram (PlantUML Source) \u25bc')
+    run.font.size = Pt(10)
+    run.font.bold = True
+    run.font.color.rgb = PRIMARY
+    add_code_block(doc, plantuml_text)
+    note = doc.add_paragraph()
+    note.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = note.add_run('Render at: plantuml.com/plantuml')
+    run.font.size = Pt(9)
+    run.font.italic = True
+    run.font.color.rgb = LIGHT_TEXT
+    return False
 
 
 def set_cell_shading(cell, color_hex):
@@ -196,12 +307,15 @@ def parse_markdown_to_docx(md_path, doc):
     with open(md_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
+    output_dir = os.path.dirname(os.path.abspath(md_path))
     i = 0
     in_code_block = False
+    is_plantuml = False
     code_buffer = []
     in_table = False
     table_headers = []
     table_rows = []
+    diagram_count = 0
 
     while i < len(lines):
         line = lines[i].rstrip('\n')
@@ -209,9 +323,17 @@ def parse_markdown_to_docx(md_path, doc):
         # Code blocks
         if line.startswith('```'):
             if in_code_block:
-                add_code_block(doc, '\n'.join(code_buffer))
+                if is_plantuml:
+                    diagram_count += 1
+                    if diagram_count > 1:
+                        import time; time.sleep(1)  # Avoid rate limiting
+                    print(f'  Rendering PlantUML diagram {diagram_count}...')
+                    add_plantuml_diagram(doc, '\n'.join(code_buffer), output_dir)
+                else:
+                    add_code_block(doc, '\n'.join(code_buffer))
                 code_buffer = []
                 in_code_block = False
+                is_plantuml = False
             else:
                 # Flush any pending table
                 if in_table:
@@ -220,6 +342,7 @@ def parse_markdown_to_docx(md_path, doc):
                     table_headers = []
                     table_rows = []
                 in_code_block = True
+                is_plantuml = line.strip().lower().startswith('```plantuml')
             i += 1
             continue
 

@@ -1,0 +1,17 @@
+{
+  "name": "chronosdb-web-admin",
+  "version": "1.0.0",
+  "description": "ChronosDB Web Administration Interface",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
+    "server:dev": "cd server && npx tsx watch src/index.ts",
+    "client:dev": "cd client && npx vite --host",
+    "build": "cd client && npx vite build",
+    "start": "cd server && node dist/index.js",
+    "server:build": "cd server && npx tsc"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
