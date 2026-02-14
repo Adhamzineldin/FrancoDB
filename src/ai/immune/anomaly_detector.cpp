@@ -26,7 +26,30 @@ std::vector<AnomalyReport> AnomalyDetector::Analyze(
 
         // Need sufficient historical intervals for a meaningful z-score.
         // Too few intervals produce unstable baselines and false positives.
-        if (historical.size() < 10) continue;
+        // However, if the absolute rate is very high, flag it anyway.
+        if (historical.size() < 10) {
+            if (current_rate >= ABSOLUTE_RATE_THRESHOLD) {
+                AnomalyReport report;
+                report.table_name = table;
+                report.severity = current_rate >= ABSOLUTE_RATE_THRESHOLD * 5
+                    ? AnomalySeverity::HIGH
+                    : current_rate >= ABSOLUTE_RATE_THRESHOLD * 2
+                        ? AnomalySeverity::MEDIUM : AnomalySeverity::LOW;
+                report.z_score = current_rate / ABSOLUTE_RATE_THRESHOLD;
+                report.current_rate = current_rate;
+                report.mean_rate = 0.0;
+                report.std_dev = 0.0;
+                report.timestamp_us = std::chrono::duration_cast<
+                    std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                std::ostringstream desc;
+                desc << "Table '" << table << "' high mutation rate "
+                     << current_rate << "/s (no baseline yet, absolute threshold)";
+                report.description = desc.str();
+                reports.push_back(report);
+            }
+            continue;
+        }
 
         double z = ComputeZScore(current_rate, historical);
         AnomalySeverity severity = Classify(z);

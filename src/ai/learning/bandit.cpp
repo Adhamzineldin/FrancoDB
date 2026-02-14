@@ -1,7 +1,9 @@
 #include "ai/learning/bandit.h"
 
 #include <cmath>
+#include <fstream>
 #include <limits>
+#include <sstream>
 
 namespace chronosdb {
 namespace ai {
@@ -153,6 +155,70 @@ double UCB1Bandit::GetAverageReward(size_t arm_index) const {
         arms_[arm_index].total_reward_x10000.load(std::memory_order_relaxed);
     return (static_cast<double>(total_reward) / 10000.0) /
            static_cast<double>(pulls);
+}
+
+bool UCB1Bandit::SaveState(const std::string& path) const {
+    std::ofstream file(path);
+    if (!file.is_open()) return false;
+
+    // Header
+    file << "CHRONOS_BANDIT_V1\n";
+    file << total_pulls_.load(std::memory_order_relaxed) << "\n";
+    file << NUM_ARMS << "\n";
+
+    // Per-arm global stats
+    for (size_t i = 0; i < NUM_ARMS; ++i) {
+        uint64_t pulls = arms_[i].pull_count.load(std::memory_order_relaxed);
+        uint64_t reward = arms_[i].total_reward_x10000.load(std::memory_order_relaxed);
+        file << pulls << " " << reward << "\n";
+
+        // Per-table stats for this arm
+        std::lock_guard lock(arms_[i].table_mutex);
+        file << arms_[i].table_stats.size() << "\n";
+        for (const auto& [table, stats] : arms_[i].table_stats) {
+            file << table << " " << stats.pulls << " " << stats.total_reward << "\n";
+        }
+    }
+
+    return file.good();
+}
+
+bool UCB1Bandit::LoadState(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) return false;
+
+    std::string header;
+    std::getline(file, header);
+    if (header != "CHRONOS_BANDIT_V1") return false;
+
+    uint64_t total_pulls;
+    size_t num_arms;
+    file >> total_pulls >> num_arms;
+    if (num_arms != NUM_ARMS) return false;
+
+    total_pulls_.store(total_pulls, std::memory_order_relaxed);
+
+    for (size_t i = 0; i < NUM_ARMS; ++i) {
+        uint64_t pulls, reward;
+        file >> pulls >> reward;
+        arms_[i].pull_count.store(pulls, std::memory_order_relaxed);
+        arms_[i].total_reward_x10000.store(reward, std::memory_order_relaxed);
+
+        size_t table_count;
+        file >> table_count;
+
+        std::lock_guard lock(arms_[i].table_mutex);
+        arms_[i].table_stats.clear();
+        for (size_t t = 0; t < table_count; ++t) {
+            std::string table_name;
+            uint64_t t_pulls;
+            double t_reward;
+            file >> table_name >> t_pulls >> t_reward;
+            arms_[i].table_stats[table_name] = {t_pulls, t_reward};
+        }
+    }
+
+    return file.good();
 }
 
 } // namespace ai

@@ -244,6 +244,56 @@ export default function AIStatus() {
             <div className="ai-formula">
               <code>UCB1: Score(a) = Q(a) + {'\u221A'}2 * {'\u221A'}(ln(N) / N_a) &nbsp;|&nbsp; Reward = 1 / (1 + time_ms / 100)</code>
             </div>
+
+            {/* Multi-Dimensional Query Plan Optimizer */}
+            {le.optimizer && (
+              <div className="optimizer-section">
+                <h4>Query Plan Optimizer (Multi-Dimensional Learning)</h4>
+                <div className="optimizer-summary">
+                  <div className="immune-metrics">
+                    <div className="immune-metric-card">
+                      <div className="immune-metric-value">{le.optimizer.total_optimizations.toLocaleString()}</div>
+                      <div className="immune-metric-label">Plans Generated</div>
+                    </div>
+                    <div className="immune-metric-card">
+                      <div className="immune-metric-value">{le.optimizer.filter_reorders.toLocaleString()}</div>
+                      <div className="immune-metric-label">Filter Reorders</div>
+                    </div>
+                    <div className="immune-metric-card">
+                      <div className="immune-metric-value">{le.optimizer.early_terminations.toLocaleString()}</div>
+                      <div className="immune-metric-label">Early Terminations</div>
+                    </div>
+                  </div>
+                  {le.optimizer.dimensions.map((dim, di) => {
+                    const totalPulls = dim.arms.reduce((s, a) => s + a.pulls, 0);
+                    return (
+                      <div key={di} className="optimizer-dimension">
+                        <div className="dimension-header">{dim.name}</div>
+                        <div className="dimension-arms">
+                          {dim.arms.map((arm, ai) => {
+                            const pct = totalPulls > 0 ? (arm.pulls / totalPulls) * 100 : 0;
+                            return (
+                              <div key={ai} className="dimension-arm">
+                                <div className="arm-name-row">
+                                  <span className="arm-name">{arm.name}</span>
+                                  <span className="arm-pulls">{arm.pulls} pulls ({pct.toFixed(0)}%)</span>
+                                </div>
+                                <div className="stat-bar">
+                                  <div className={`stat-bar-fill dim-${ai}`} style={{ width: `${pct}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="ai-formula">
+                  <code>Dimensions: Scan Strategy | Filter Ordering (selectivity/cost) | Limit (full scan/early termination)</code>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

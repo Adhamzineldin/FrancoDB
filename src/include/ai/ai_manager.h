@@ -53,11 +53,17 @@ public:
     };
     AIStatus GetStatus() const;
 
+    // State persistence - saves/loads AI learning data across restarts
+    bool SaveState() const;
+    bool LoadState();
+
 private:
     AIManager() = default;
     ~AIManager();
     AIManager(const AIManager&) = delete;
     AIManager& operator=(const AIManager&) = delete;
+
+    std::string GetStateDirectory() const;
 
     std::unique_ptr<LearningEngine> learning_engine_;
     std::unique_ptr<ImmuneSystem> immune_system_;

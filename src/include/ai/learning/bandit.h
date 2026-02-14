@@ -54,6 +54,10 @@ public:
 
     void Reset();
 
+    // State persistence
+    bool SaveState(const std::string& path) const;
+    bool LoadState(const std::string& path);
+
 private:
     static constexpr size_t NUM_ARMS = 2;
 

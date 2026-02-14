@@ -30,7 +30,9 @@ struct DMLEvent {
     size_t where_clause_count = 0;
     bool has_order_by = false;
     bool has_limit = false;
+    int32_t limit_value = -1;
     int32_t result_row_count = 0;
+    uint32_t total_rows_scanned = 0;  // Total rows examined before filtering
 };
 
 /**

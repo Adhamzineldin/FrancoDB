@@ -65,6 +65,12 @@ static constexpr uint64_t RECOVERY_LOOKBACK_US = 60ULL * 1000000;  // 60 seconds
 // Maximum anomaly history entries retained
 static constexpr size_t MAX_ANOMALY_HISTORY = 200;
 
+// Absolute threshold: a single DML affecting >= this many rows triggers immediate detection
+static constexpr uint32_t MASS_OPERATION_ROW_THRESHOLD = 50;
+
+// Absolute rate threshold: mutations/sec above this is anomalous even without baseline history
+static constexpr double ABSOLUTE_RATE_THRESHOLD = 10.0;
+
 // User deviation weights
 static constexpr double USER_DEVIATION_MUTATION_WEIGHT = 0.7;
 static constexpr double USER_DEVIATION_TABLE_WEIGHT = 0.3;

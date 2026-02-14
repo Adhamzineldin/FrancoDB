@@ -7,6 +7,7 @@
 
 #include "ai/dml_observer.h"
 #include "ai/learning/bandit.h"
+#include "ai/learning/execution_plan.h"
 #include "ai/learning/query_features.h"
 
 namespace chronosdb {
@@ -15,6 +16,8 @@ class Catalog;
 class SelectStatement;
 
 namespace ai {
+
+class QueryPlanOptimizer;
 
 /**
  * IQueryOptimizer - Interface for AI-powered scan strategy recommendation.
@@ -53,15 +56,29 @@ public:
     // IDMLObserver
     void OnAfterDML(const DMLEvent& event) override;
 
-    // IQueryOptimizer
+    // IQueryOptimizer (scan strategy - backward compatible)
     bool RecommendScanStrategy(const SelectStatement* stmt,
                                const std::string& table_name,
                                ScanStrategy& out_strategy) override;
+
+    // Full execution plan optimization (new - multi-dimensional)
+    ExecutionPlan OptimizeQuery(const SelectStatement* stmt,
+                                const std::string& table_name) const;
+
+    // Record rich execution feedback for learning
+    void RecordExecutionFeedback(const ExecutionFeedback& feedback);
+
+    // Get the query plan optimizer for direct access
+    QueryPlanOptimizer* GetPlanOptimizer() const;
 
     // Status for SHOW EXECUTION STATS
     std::string GetSummary() const;
     std::vector<UCB1Bandit::ArmStats> GetArmStats() const;
     uint64_t GetTotalQueriesObserved() const;
+
+    // State persistence
+    bool SaveState(const std::string& dir) const;
+    bool LoadState(const std::string& dir);
 
     // Lifecycle
     void Start();
@@ -71,6 +88,7 @@ private:
     Catalog* catalog_;
     std::unique_ptr<QueryFeatureExtractor> feature_extractor_;
     std::unique_ptr<UCB1Bandit> bandit_;
+    std::unique_ptr<QueryPlanOptimizer> plan_optimizer_;
 
     std::atomic<uint64_t> total_queries_{0};
     std::atomic<bool> active_{false};

@@ -1,8 +1,11 @@
 #include "ai/learning/learning_engine.h"
+#include "ai/learning/query_plan_optimizer.h"
 #include "ai/metrics_store.h"
 #include "common/logger.h"
 #include "parser/statement.h"
 
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 
 namespace chronosdb {
@@ -11,7 +14,8 @@ namespace ai {
 LearningEngine::LearningEngine(Catalog* catalog)
     : catalog_(catalog),
       feature_extractor_(std::make_unique<QueryFeatureExtractor>(catalog)),
-      bandit_(std::make_unique<UCB1Bandit>()) {}
+      bandit_(std::make_unique<UCB1Bandit>()),
+      plan_optimizer_(std::make_unique<QueryPlanOptimizer>(catalog)) {}
 
 LearningEngine::~LearningEngine() {
     Stop();
@@ -57,6 +61,36 @@ bool LearningEngine::RecommendScanStrategy(const SelectStatement* stmt,
     return true;
 }
 
+ExecutionPlan LearningEngine::OptimizeQuery(
+    const SelectStatement* stmt, const std::string& table_name) const {
+    if (!active_.load()) {
+        ExecutionPlan default_plan;
+        for (size_t i = 0; i < stmt->where_clause_.size(); ++i)
+            default_plan.filter_order.push_back(i);
+        return default_plan;
+    }
+
+    // Get multi-dimensional plan from optimizer
+    ExecutionPlan plan = plan_optimizer_->Optimize(stmt, table_name);
+
+    // Fill in scan strategy from the existing bandit (backward compatible)
+    if (bandit_->HasSufficientData()) {
+        QueryFeatures features = feature_extractor_->Extract(stmt, table_name);
+        plan.scan_strategy = bandit_->SelectStrategy(features, table_name);
+    }
+
+    return plan;
+}
+
+void LearningEngine::RecordExecutionFeedback(const ExecutionFeedback& feedback) {
+    if (!active_.load()) return;
+    plan_optimizer_->RecordFeedback(feedback);
+}
+
+QueryPlanOptimizer* LearningEngine::GetPlanOptimizer() const {
+    return plan_optimizer_.get();
+}
+
 std::string LearningEngine::GetSummary() const {
     uint64_t queries = total_queries_.load(std::memory_order_relaxed);
     bool ready = bandit_->HasSufficientData();
@@ -74,6 +108,13 @@ std::string LearningEngine::GetSummary() const {
         }
     } else {
         oss << ", learning (need " << MIN_SAMPLES_BEFORE_LEARNING << ")";
+    }
+
+    // Add optimizer stats
+    auto opt_stats = plan_optimizer_->GetStats();
+    if (opt_stats.total_optimizations > 0) {
+        oss << " | Optimizer: " << opt_stats.filter_reorders << " filter reorders, "
+            << opt_stats.early_terminations << " early terminations";
     }
     return oss.str();
 }
@@ -95,6 +136,55 @@ void LearningEngine::Start() {
 
 void LearningEngine::Stop() {
     active_ = false;
+}
+
+bool LearningEngine::SaveState(const std::string& dir) const {
+    try {
+        std::filesystem::create_directories(dir);
+    } catch (...) {
+        return false;
+    }
+
+    // Save bandit state
+    if (!bandit_->SaveState(dir + "/bandit.dat")) return false;
+
+    // Save plan optimizer state
+    if (!plan_optimizer_->SaveState(dir + "/optimizer.dat")) return false;
+
+    // Save learning engine metadata
+    std::ofstream file(dir + "/learning_engine.dat");
+    if (!file.is_open()) return false;
+
+    file << "CHRONOS_LEARNING_V2\n";
+    file << total_queries_.load(std::memory_order_relaxed) << "\n";
+
+    return file.good();
+}
+
+bool LearningEngine::LoadState(const std::string& dir) {
+    // Load bandit state
+    if (!bandit_->LoadState(dir + "/bandit.dat")) return false;
+
+    // Load plan optimizer state (optional - may not exist in older saves)
+    std::string opt_path = dir + "/optimizer.dat";
+    if (std::filesystem::exists(opt_path)) {
+        plan_optimizer_->LoadState(opt_path);
+    }
+
+    // Load learning engine metadata
+    std::ifstream file(dir + "/learning_engine.dat");
+    if (!file.is_open()) return false;
+
+    std::string header;
+    std::getline(file, header);
+    // Accept both V1 and V2 formats
+    if (header != "CHRONOS_LEARNING_V1" && header != "CHRONOS_LEARNING_V2") return false;
+
+    uint64_t queries;
+    file >> queries;
+    total_queries_.store(queries, std::memory_order_relaxed);
+
+    return file.good();
 }
 
 } // namespace ai

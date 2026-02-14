@@ -52,6 +52,23 @@ export interface AIScheduledTask {
   periodic: boolean;
 }
 
+export interface AIOptimizerDimensionArm {
+  name: string;
+  pulls: number;
+}
+
+export interface AIOptimizerDimension {
+  name: string;
+  arms: AIOptimizerDimensionArm[];
+}
+
+export interface AIOptimizerStats {
+  total_optimizations: number;
+  filter_reorders: number;
+  early_terminations: number;
+  dimensions: AIOptimizerDimension[];
+}
+
 export interface AIDetailedResponse {
   initialized: boolean;
   metrics_recorded?: number;
@@ -63,6 +80,7 @@ export interface AIDetailedResponse {
     ready?: boolean;
     arms?: AIArmStats[];
     summary?: string;
+    optimizer?: AIOptimizerStats;
   };
   immune_system?: {
     active: boolean;

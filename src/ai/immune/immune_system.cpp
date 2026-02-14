@@ -97,6 +97,47 @@ void ImmuneSystem::OnAfterDML(const DMLEvent& event) {
     metric.db_name = event.db_name;
     metric.rows_affected = event.rows_affected;
     MetricsStore::Instance().Record(metric);
+
+    // Immediate detection: mass operations bypass warmup and periodic analysis.
+    // A single DML affecting many rows is suspicious regardless of history.
+    if (event.operation != DMLOperation::SELECT &&
+        event.rows_affected >= MASS_OPERATION_ROW_THRESHOLD) {
+
+        AnomalySeverity severity;
+        if (event.rows_affected >= MASS_OPERATION_ROW_THRESHOLD * 10) {
+            severity = AnomalySeverity::HIGH;   // 500+ rows = auto-recover
+        } else if (event.rows_affected >= MASS_OPERATION_ROW_THRESHOLD * 4) {
+            severity = AnomalySeverity::MEDIUM;  // 200+ rows = block table
+        } else {
+            severity = AnomalySeverity::LOW;     // 50+ rows = log warning
+        }
+
+        std::string op_name;
+        switch (event.operation) {
+            case DMLOperation::INSERT:   op_name = "INSERT"; break;
+            case DMLOperation::UPDATE:   op_name = "UPDATE"; break;
+            case DMLOperation::DELETE_OP: op_name = "DELETE"; break;
+            default: op_name = "DML"; break;
+        }
+
+        AnomalyReport report;
+        report.table_name = event.table_name;
+        report.user = event.user;
+        report.severity = severity;
+        report.z_score = static_cast<double>(event.rows_affected); // Use rows as "score"
+        report.current_rate = static_cast<double>(event.rows_affected);
+        report.mean_rate = 0.0;
+        report.std_dev = 0.0;
+        report.timestamp_us = event.start_time_us;
+        report.description = "Mass " + op_name + " on '" + event.table_name +
+            "': " + std::to_string(event.rows_affected) + " rows affected in single operation";
+
+        anomaly_detector_->RecordAnomaly(report);
+        response_engine_->Respond(report);
+
+        LOG_WARN("ImmuneSystem", report.description +
+                 " [severity=" + AnomalyDetector::SeverityToString(severity) + "]");
+    }
 }
 
 void ImmuneSystem::PeriodicAnalysis() {

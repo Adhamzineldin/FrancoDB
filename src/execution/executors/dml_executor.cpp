@@ -39,6 +39,8 @@
 #include "ai/dml_observer.h"
 #include "ai/ai_manager.h"
 #include "ai/learning/learning_engine.h"
+#include "ai/learning/execution_plan.h"
+#include "ai/learning/query_plan_optimizer.h"
 #include "ai/temporal/temporal_index_manager.h"
 #include <algorithm>
 #include <chrono>
@@ -137,6 +139,7 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
     ai_event.where_clause_count = stmt->where_clause_.size();
     ai_event.has_order_by = !stmt->order_by_.empty();
     ai_event.has_limit = (stmt->limit_ > 0);
+    ai_event.limit_value = stmt->limit_;
     if (session) {
         ai_event.db_name = session->current_db;
         ai_event.user = session->current_user;
@@ -295,42 +298,45 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
         // NORMAL PATH: Use Executor (Live Table or Index Scan)
         // =================================================================
         else {
-            // AI Learning Engine: consult for scan strategy recommendation
-            bool ai_recommended = false;
+            // AI Learning Engine: get full execution plan
+            ai::ExecutionPlan exec_plan;
+            bool has_ai_plan = false;
             {
                 auto& ai_mgr = ai::AIManager::Instance();
                 if (ai_mgr.IsInitialized() && ai_mgr.GetLearningEngine()) {
-                    ai::ScanStrategy recommended;
-                    if (ai_mgr.GetLearningEngine()->RecommendScanStrategy(
-                            stmt, stmt->table_name_, recommended)) {
-                        // AI has a recommendation — check if index exists for it
-                        if (recommended == ai::ScanStrategy::INDEX_SCAN &&
-                            !stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
-                            const auto& cond = stmt->where_clause_[0];
-                            auto indexes = catalog_->GetTableIndexes(stmt->table_name_);
-                            for (auto* idx : indexes) {
-                                if (idx->col_name_ == cond.column && idx->b_plus_tree_) {
-                                    try {
-                                        Value lookup_val(TypeId::INTEGER, std::stoi(cond.value.ToString()));
-                                        executor = new IndexScanExecutor(&ctx, stmt, idx, lookup_val, txn);
-                                        use_index = true;
-                                        ai_recommended = true;
-                                        break;
-                                    } catch (...) {}
-                                }
-                            }
-                        } else if (recommended == ai::ScanStrategy::SEQUENTIAL_SCAN) {
-                            ai_recommended = true; // AI says seq scan, skip index check
-                        }
+                    exec_plan = ai_mgr.GetLearningEngine()->OptimizeQuery(
+                        stmt, stmt->table_name_);
+                    has_ai_plan = exec_plan.ai_generated;
+                }
+            }
+
+            // ---- Scan Strategy Decision ----
+            bool ai_recommended = false;
+
+            // Check if AI recommends index scan
+            if (has_ai_plan && exec_plan.scan_strategy == ai::ScanStrategy::INDEX_SCAN &&
+                !stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
+                const auto& cond = stmt->where_clause_[0];
+                auto indexes = catalog_->GetTableIndexes(stmt->table_name_);
+                for (auto* idx : indexes) {
+                    if (idx->col_name_ == cond.column && idx->b_plus_tree_) {
+                        try {
+                            Value lookup_val(TypeId::INTEGER, std::stoi(cond.value.ToString()));
+                            executor = new IndexScanExecutor(&ctx, stmt, idx, lookup_val, txn);
+                            use_index = true;
+                            ai_recommended = true;
+                            break;
+                        } catch (...) {}
                     }
                 }
+            } else if (has_ai_plan && exec_plan.scan_strategy == ai::ScanStrategy::SEQUENTIAL_SCAN) {
+                ai_recommended = true; // AI says seq scan
             }
 
             // Fallback: original index scan check (if AI didn't decide)
             if (!ai_recommended && !stmt->where_clause_.empty() && stmt->where_clause_[0].op == "=") {
                 const auto& cond = stmt->where_clause_[0];
                 auto indexes = catalog_->GetTableIndexes(stmt->table_name_);
-
                 for (auto* idx : indexes) {
                     if (idx->col_name_ == cond.column && idx->b_plus_tree_) {
                         try {
@@ -338,9 +344,7 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
                             executor = new IndexScanExecutor(&ctx, stmt, idx, lookup_val, txn);
                             use_index = true;
                             break;
-                        } catch (...) {
-                            // Failed to parse as integer, fall back to seq scan
-                        }
+                        } catch (...) {}
                     }
                 }
             }
@@ -358,16 +362,57 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
                 return ExecutionResult::Error("[DML] Failed to initialize executor");
             }
 
-            // Fetch all matching tuples
+            // ---- Fetch and Filter with AI-Optimized Plan ----
             Tuple tuple;
             const Schema* output_schema = executor->GetOutputSchema();
+            uint32_t rows_scanned = 0;
+            bool use_early_termination = has_ai_plan &&
+                exec_plan.limit_strategy == ai::LimitStrategy::EARLY_TERMINATION &&
+                stmt->limit_ > 0 && stmt->order_by_.empty();
 
             while (executor->Next(&tuple)) {
+                rows_scanned++;
                 std::vector<std::string> row_strings;
                 for (uint32_t col_idx : column_indices) {
                     row_strings.push_back(tuple.GetValue(*output_schema, col_idx).ToString());
                 }
                 all_rows.push_back(row_strings);
+
+                // Early termination: stop scanning if we have enough rows
+                // Only when there's no ORDER BY (otherwise we need all rows to sort)
+                if (use_early_termination &&
+                    static_cast<int>(all_rows.size()) >= stmt->limit_) {
+                    break;
+                }
+            }
+
+            ai_event.total_rows_scanned = rows_scanned;
+
+            // ---- Record Rich Feedback for Learning Engine ----
+            if (has_ai_plan) {
+                auto& ai_mgr = ai::AIManager::Instance();
+                if (ai_mgr.IsInitialized() && ai_mgr.GetLearningEngine()) {
+                    ai::ExecutionFeedback feedback;
+                    feedback.table_name = stmt->table_name_;
+                    feedback.duration_us = 0; // Will be filled after timing
+                    feedback.total_rows_scanned = rows_scanned;
+                    feedback.rows_after_filter = static_cast<uint32_t>(all_rows.size());
+                    feedback.result_rows = static_cast<uint32_t>(all_rows.size());
+                    feedback.used_index = use_index;
+                    feedback.where_clause_count = stmt->where_clause_.size();
+                    feedback.had_limit = (stmt->limit_ > 0);
+                    feedback.limit_value = stmt->limit_;
+                    feedback.had_order_by = !stmt->order_by_.empty();
+                    feedback.plan_used = exec_plan;
+
+                    // Timing will be computed at the end; record feedback then
+                    auto end_feedback_us = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()).count());
+                    feedback.duration_us = end_feedback_us - ai_event.start_time_us;
+
+                    ai_mgr.GetLearningEngine()->RecordExecutionFeedback(feedback);
+                }
             }
 
             delete executor;

@@ -15,6 +15,7 @@
 #include "ai/metrics_store.h"
 #include "ai/ai_config.h"
 #include "ai/learning/learning_engine.h"
+#include "ai/learning/query_plan_optimizer.h"
 #include "ai/immune/immune_system.h"
 #include "ai/temporal/temporal_index_manager.h"
 
@@ -713,6 +714,30 @@ HttpResponse HttpHandler::HandleGetAIDetailed(const HttpRequest& req) {
         }
         json << "\n    ]";
         json << ",\n    \"summary\": \"" << JsonEscape(learning->GetSummary()) << "\"";
+
+        // ── Query Plan Optimizer (multi-dimensional learning) ──
+        auto* optimizer = learning->GetPlanOptimizer();
+        if (optimizer) {
+            auto opt_stats = optimizer->GetStats();
+            json << ",\n    \"optimizer\": {";
+            json << "\n      \"total_optimizations\": " << opt_stats.total_optimizations;
+            json << ",\n      \"filter_reorders\": " << opt_stats.filter_reorders;
+            json << ",\n      \"early_terminations\": " << opt_stats.early_terminations;
+            json << ",\n      \"dimensions\": [";
+            for (size_t d = 0; d < opt_stats.dimensions.size(); d++) {
+                if (d > 0) json << ",";
+                json << "\n        {\"name\": \"" << JsonEscape(opt_stats.dimensions[d].dimension_name) << "\"";
+                json << ", \"arms\": [";
+                for (size_t a = 0; a < opt_stats.dimensions[d].arm_pulls.size(); a++) {
+                    if (a > 0) json << ", ";
+                    json << "{\"name\": \"" << JsonEscape(opt_stats.dimensions[d].arm_pulls[a].first)
+                         << "\", \"pulls\": " << opt_stats.dimensions[d].arm_pulls[a].second << "}";
+                }
+                json << "]}";
+            }
+            json << "\n      ]";
+            json << "\n    }";
+        }
     }
     json << "\n  }";
 

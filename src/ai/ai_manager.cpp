@@ -5,7 +5,10 @@
 #include "ai/learning/learning_engine.h"
 #include "ai/immune/immune_system.h"
 #include "ai/temporal/temporal_index_manager.h"
+#include "common/config_manager.h"
 #include "common/logger.h"
+
+#include <filesystem>
 
 namespace chronosdb {
 namespace ai {
@@ -53,6 +56,12 @@ void AIManager::Initialize(Catalog* catalog, IBufferManager* bpm,
     temporal_index_mgr_->Start();
 
     initialized_ = true;
+
+    // Restore previously learned state from disk
+    if (LoadState()) {
+        LOG_INFO("AIManager", "AI state restored from " + GetStateDirectory());
+    }
+
     LOG_INFO("AIManager", "AI Layer initialized: Learning Engine, "
              "Immune System, Temporal Index Manager");
 }
@@ -61,6 +70,13 @@ void AIManager::Shutdown() {
     if (!initialized_.load()) return;
 
     LOG_INFO("AIManager", "Shutting down AI Layer...");
+
+    // Persist learned state to disk before stopping
+    if (SaveState()) {
+        LOG_INFO("AIManager", "AI state saved to " + GetStateDirectory());
+    } else {
+        LOG_WARN("AIManager", "Failed to save AI state");
+    }
 
     // Stop in reverse order
     if (temporal_index_mgr_) {
@@ -120,6 +136,62 @@ AIManager::AIStatus AIManager::GetStatus() const {
     }
 
     return status;
+}
+
+std::string AIManager::GetStateDirectory() const {
+    std::string data_dir = ConfigManager::GetInstance().GetDataDirectory();
+    return data_dir + "/ai_state";
+}
+
+bool AIManager::SaveState() const {
+    std::string state_dir = GetStateDirectory();
+
+    try {
+        std::filesystem::create_directories(state_dir);
+    } catch (...) {
+        return false;
+    }
+
+    bool ok = true;
+
+    if (learning_engine_) {
+        if (!learning_engine_->SaveState(state_dir + "/learning")) {
+            LOG_WARN("AIManager", "Failed to save Learning Engine state");
+            ok = false;
+        }
+    }
+
+    // Immune System and Temporal Index have runtime-only state (baselines, hotspots)
+    // that rebuilds naturally from live data. Only the Learning Engine's
+    // accumulated rewards and pull counts are worth persisting across restarts.
+
+    return ok;
+}
+
+bool AIManager::LoadState() {
+    std::string state_dir = GetStateDirectory();
+
+    if (!std::filesystem::exists(state_dir)) {
+        return false; // No saved state, fresh start
+    }
+
+    bool ok = true;
+
+    if (learning_engine_) {
+        std::string learning_dir = state_dir + "/learning";
+        if (std::filesystem::exists(learning_dir)) {
+            if (!learning_engine_->LoadState(learning_dir)) {
+                LOG_WARN("AIManager", "Failed to load Learning Engine state, starting fresh");
+                ok = false;
+            } else {
+                LOG_INFO("AIManager", "Learning Engine state restored ("
+                         + std::to_string(learning_engine_->GetTotalQueriesObserved())
+                         + " prior observations)");
+            }
+        }
+    }
+
+    return ok;
 }
 
 } // namespace ai
