@@ -533,7 +533,7 @@ app.post('/api/test/performance-compare', requireAuth, async (req, res) => {
     await client.query('CREATE INDEX idx_perf_value ON perf_with_index(value)');
 
     // Insert data
-    const batchSize = 1000;
+    const batchSize = 100000; // Increased batch size for better performance
     const batches = Math.ceil(rowCount / batchSize);
 
     for (let batch = 0; batch < batches; batch++) {

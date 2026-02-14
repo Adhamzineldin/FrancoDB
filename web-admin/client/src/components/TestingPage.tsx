@@ -425,7 +425,7 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     const insStart = performance.now();
 
     // Use multi-row INSERT for better performance
-    const BATCH_SIZE = 100; // Number of rows per INSERT statement
+    const BATCH_SIZE = 10000; // Number of rows per INSERT statement (increased for efficiency)
     const totalBatches = Math.ceil(perfConfig.rowCount / BATCH_SIZE);
 
     for (let batch = 0; batch < totalBatches; batch++) {

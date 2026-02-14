@@ -583,35 +583,80 @@ HttpResponse HttpHandler::HandleBatchQuery(const HttpRequest& req) {
         return resp;
     }
 
-    // Simple JSON array parsing
+    // Improved JSON array parsing - handles complex SQL statements with special characters
     std::vector<std::string> queries;
-    size_t pos = 0;
-    while ((pos = queries_str.find('"', pos)) != std::string::npos) {
-        size_t start = pos + 1;
-        size_t end = queries_str.find('"', start);
-        while (end != std::string::npos && end > 0 && queries_str[end - 1] == '\\') {
-            end = queries_str.find('"', end + 1);
+
+    // queries_str should be like: ["sql1", "sql2", ...]
+    // Find the actual content between [ and ]
+    size_t array_start = queries_str.find('[');
+    size_t array_end = queries_str.rfind(']');
+    if (array_start == std::string::npos || array_end == std::string::npos || array_end <= array_start) {
+        // Try parsing without brackets (ParseJsonField may have included them)
+        array_start = 0;
+        array_end = queries_str.size();
+    } else {
+        array_start++; // Skip '['
+    }
+
+    size_t pos = array_start;
+    while (pos < array_end) {
+        // Skip whitespace and commas
+        while (pos < array_end && (queries_str[pos] == ' ' || queries_str[pos] == '\t' ||
+               queries_str[pos] == '\n' || queries_str[pos] == '\r' || queries_str[pos] == ',')) {
+            pos++;
         }
-        if (end == std::string::npos) break;
-        std::string query = queries_str.substr(start, end - start);
-        // Unescape basic JSON escapes
-        size_t p = 0;
-        while ((p = query.find("\\\"", p)) != std::string::npos) {
-            query.replace(p, 2, "\"");
-            p++;
+
+        if (pos >= array_end) break;
+
+        // Look for opening quote
+        if (queries_str[pos] != '"') {
+            pos++;
+            continue;
         }
-        p = 0;
-        while ((p = query.find("\\n", p)) != std::string::npos) {
-            query.replace(p, 2, "\n");
-            p++;
+
+        pos++; // Skip opening quote
+        size_t start = pos;
+
+        // Find closing quote, handling escapes properly
+        while (pos < array_end) {
+            if (queries_str[pos] == '\\' && pos + 1 < array_end) {
+                pos += 2; // Skip escaped character
+                continue;
+            }
+            if (queries_str[pos] == '"') {
+                break;
+            }
+            pos++;
         }
-        p = 0;
-        while ((p = query.find("\\\\", p)) != std::string::npos) {
-            query.replace(p, 2, "\\");
-            p++;
+
+        if (pos >= array_end) break;
+
+        // Extract the query string
+        std::string query = queries_str.substr(start, pos - start);
+        pos++; // Skip closing quote
+
+        // Unescape JSON escapes
+        std::string unescaped;
+        unescaped.reserve(query.size());
+        for (size_t i = 0; i < query.size(); i++) {
+            if (query[i] == '\\' && i + 1 < query.size()) {
+                char next = query[i + 1];
+                switch (next) {
+                    case '"': unescaped += '"'; i++; break;
+                    case '\\': unescaped += '\\'; i++; break;
+                    case 'n': unescaped += '\n'; i++; break;
+                    case 'r': unescaped += '\r'; i++; break;
+                    case 't': unescaped += '\t'; i++; break;
+                    default: unescaped += query[i]; break;
+                }
+            } else {
+                unescaped += query[i];
+            }
         }
-        queries.push_back(query);
-        pos = end + 1;
+
+        if (!unescaped.empty()) {
+            queries.push_back(unescaped);
+        }
     }
 
     if (queries.empty()) {
