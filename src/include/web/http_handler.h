@@ -98,6 +98,7 @@ private:
     HttpResponse HandleGetTableSchema(const HttpRequest& req, const std::string& table);
     HttpResponse HandleGetTableData(const HttpRequest& req, const std::string& table);
     HttpResponse HandleQuery(const HttpRequest& req);
+    HttpResponse HandleBatchQuery(const HttpRequest& req);
     HttpResponse HandleGetUsers(const HttpRequest& req);
     HttpResponse HandleCreateUser(const HttpRequest& req);
     HttpResponse HandleDeleteUser(const HttpRequest& req, const std::string& username);

@@ -87,14 +87,14 @@ ExecutionResult DMLExecutor::Insert(InsertStatement* stmt, Transaction* txn) {
         // Create and initialize the insert executor
         InsertExecutor executor(&ctx, stmt, txn);
         executor.Init();
-
-        // Execute the insert
+        // Execute the insert - executor processes all rows in batches for efficiency
         Tuple result_tuple;
-        int insert_count = 0;
-
         while (executor.Next(&result_tuple)) {
-            insert_count++;
+            // executor.Next() handles batch insertion internally
         }
+
+        // Get actual inserted count (supports multi-row insert)
+        size_t insert_count = executor.GetInsertedCount();
 
         // AI Observer: Notify after INSERT
         auto end_us = static_cast<uint64_t>(

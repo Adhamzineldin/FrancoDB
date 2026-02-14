@@ -87,6 +87,19 @@ export const api = {
       body: JSON.stringify({ sql }),
     }),
 
+  // Batch Query - execute multiple SQL statements at once
+  batchQuery: (queries: string[]) =>
+    request<{
+      success: boolean;
+      total_queries: number;
+      results: Array<{ index: number; success: boolean; error?: string; rows_affected?: number }>;
+      success_count: number;
+      failure_count: number;
+    }>('/query/batch', {
+      method: 'POST',
+      body: JSON.stringify({ queries }),
+    }),
+
   // Users
   getUsers: () => request('/users'),
 

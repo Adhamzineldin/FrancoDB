@@ -1,4 +1,4 @@
-B/**
+/**
  * ddl_executor.cpp
  * 
  * Production-Grade Implementation of Data Definition Language Operations

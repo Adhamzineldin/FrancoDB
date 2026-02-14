@@ -245,6 +245,57 @@ app.post('/api/query', requireAuth, async (req, res) => {
 });
 
 // ────────────────────────────────────────────
+// BATCH QUERY ROUTE - Execute multiple queries at once
+// ────────────────────────────────────────────
+app.post('/api/query/batch', requireAuth, async (req, res) => {
+  try {
+    const { queries } = req.body;
+    if (!queries || !Array.isArray(queries) || queries.length === 0) {
+      res.status(400).json({ success: false, error: 'Array of SQL queries required' });
+      return;
+    }
+
+    const client = await getClient(req);
+    const results: Array<{ index: number; success: boolean; error?: string; rows_affected?: number; message?: string }> = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Execute all queries sequentially
+    for (let i = 0; i < queries.length; i++) {
+      const sql = queries[i];
+      try {
+        const result = await client.query(sql);
+        if (result.error) {
+          results.push({ index: i, success: false, error: result.error });
+          failureCount++;
+        } else {
+          results.push({
+            index: i,
+            success: true,
+            rows_affected: result.rows_affected || 0,
+            message: result.message
+          });
+          successCount++;
+        }
+      } catch (err: any) {
+        results.push({ index: i, success: false, error: err.message });
+        failureCount++;
+      }
+    }
+
+    res.json({
+      success: failureCount === 0,
+      total_queries: queries.length,
+      results,
+      success_count: successCount,
+      failure_count: failureCount,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────
 // USER MANAGEMENT ROUTES
 // ────────────────────────────────────────────
 app.get('/api/users', requireAuth, async (req, res) => {

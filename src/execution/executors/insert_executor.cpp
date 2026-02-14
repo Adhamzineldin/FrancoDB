@@ -76,233 +76,248 @@ namespace chronosdb {
         if (table_info_ == nullptr) throw Exception(ExceptionType::EXECUTION, "table_info_ is null");
         if (plan_ == nullptr) throw Exception(ExceptionType::EXECUTION, "plan_ is null");
 
-        // --- STEP 1: VALUE REORDERING ---
-        std::vector<Value> reordered_values;
-        reordered_values.resize(table_info_->schema_.GetColumnCount());
+        // Determine how many rows to insert
+        bool is_multi_row = plan_->IsMultiRowInsert();
+        size_t total_rows = is_multi_row ? plan_->value_rows_.size() : 1;
 
-        if (!plan_->column_names_.empty()) {
-            if (plan_->values_.size() != plan_->column_names_.size()) {
-                throw Exception(ExceptionType::EXECUTION, "Input value count does not match column name count");
-            }
-            for (size_t i = 0; i < plan_->column_names_.size(); ++i) {
-                int col_idx = table_info_->schema_.GetColIdx(plan_->column_names_[i]);
-                if (col_idx < 0) throw Exception(ExceptionType::EXECUTION,
-                                                 "Column not found: " + plan_->column_names_[i]);
-                reordered_values[col_idx] = plan_->values_[i];
-            }
-        } else {
-            if (plan_->values_.size() != table_info_->schema_.GetColumnCount()) {
-                throw Exception(ExceptionType::EXECUTION, "Column count mismatch");
-            }
-            reordered_values = plan_->values_;
-        }
+        // Process all rows in a batch for efficiency
+        while (current_row_idx_ < total_rows) {
+            // Get the values for the current row
+            const std::vector<Value>& current_values = is_multi_row
+                ? plan_->value_rows_[current_row_idx_]
+                : plan_->values_;
 
-        // --- STEP 2: SCHEMA VALIDATION & CONSTRAINTS ---
-        for (uint32_t i = 0; i < reordered_values.size(); i++) {
-            const Column &col = table_info_->schema_.GetColumn(i);
-            const Value &val = reordered_values[i];
+            // --- STEP 1: VALUE REORDERING ---
+            std::vector<Value> reordered_values;
+            reordered_values.resize(table_info_->schema_.GetColumnCount());
 
-            // Null Check
-            if (val.GetTypeId() == TypeId::VARCHAR && val.GetAsString().empty()) {
-                throw Exception(ExceptionType::EXECUTION, "NULL values not allowed: column '" + col.GetName() + "'");
-            }
-
-            // Type Compatibility
-            if (val.GetTypeId() != col.GetType()) {
-                if (col.GetType() == TypeId::INTEGER && val.GetTypeId() == TypeId::VARCHAR) {
-                    try { std::stoi(val.GetAsString()); } catch (...) {
-                        throw Exception(ExceptionType::EXECUTION, "Type mismatch INT");
-                    }
-                } else if (col.GetType() == TypeId::DECIMAL && val.GetTypeId() == TypeId::VARCHAR) {
-                    try { std::stod(val.GetAsString()); } catch (...) {
-                        throw Exception(ExceptionType::EXECUTION, "Type mismatch DECIMAL");
-                    }
-                } else {
-                    throw Exception(ExceptionType::EXECUTION, "Type mismatch");
+            if (!plan_->column_names_.empty()) {
+                if (current_values.size() != plan_->column_names_.size()) {
+                    throw Exception(ExceptionType::EXECUTION, "Input value count does not match column name count");
                 }
+                for (size_t i = 0; i < plan_->column_names_.size(); ++i) {
+                    int col_idx = table_info_->schema_.GetColIdx(plan_->column_names_[i]);
+                    if (col_idx < 0) throw Exception(ExceptionType::EXECUTION,
+                                                     "Column not found: " + plan_->column_names_[i]);
+                    reordered_values[col_idx] = current_values[i];
+                }
+            } else {
+                if (current_values.size() != table_info_->schema_.GetColumnCount()) {
+                    throw Exception(ExceptionType::EXECUTION, "Column count mismatch");
+                }
+                reordered_values = current_values;
             }
 
-            // CHECK Constraints (Simplified Parsing)
-            if (col.HasCheckConstraint()) {
-                std::string check = col.GetCheckConstraint();
-                size_t op_pos = std::string::npos;
-                std::string op;
-                if (check.find(">=") != std::string::npos) {
-                    op_pos = check.find(">=");
-                    op = ">=";
-                } else if (check.find("<=") != std::string::npos) {
-                    op_pos = check.find("<=");
-                    op = "<=";
-                } else if (check.find("!=") != std::string::npos) {
-                    op_pos = check.find("!=");
-                    op = "!=";
-                } else if (check.find("=") != std::string::npos) {
-                    op_pos = check.find("=");
-                    op = "=";
-                } else if (check.find(">") != std::string::npos) {
-                    op_pos = check.find(">");
-                    op = ">";
-                } else if (check.find("<") != std::string::npos) {
-                    op_pos = check.find("<");
-                    op = "<";
+            // --- STEP 2: SCHEMA VALIDATION & CONSTRAINTS ---
+            for (uint32_t i = 0; i < reordered_values.size(); i++) {
+                const Column &col = table_info_->schema_.GetColumn(i);
+                const Value &val = reordered_values[i];
+
+                // Null Check
+                if (val.GetTypeId() == TypeId::VARCHAR && val.GetAsString().empty()) {
+                    throw Exception(ExceptionType::EXECUTION, "NULL values not allowed: column '" + col.GetName() + "'");
                 }
 
-                if (op_pos != std::string::npos) {
-                    try {
-                        std::string right_side = check.substr(op_pos + op.length());
-                        while (!right_side.empty() && isspace(right_side.front())) right_side.erase(0, 1);
-
-                        bool passed = false;
-                        if (val.GetTypeId() == TypeId::INTEGER) {
-                            int actual = (val.GetTypeId() == TypeId::VARCHAR)
-                                             ? std::stoi(val.GetAsString())
-                                             : val.GetAsInteger();
-                            int expected = std::stoi(right_side);
-                            if (op == ">") passed = actual > expected;
-                            else if (op == ">=") passed = actual >= expected;
-                            else if (op == "<") passed = actual < expected;
-                            else if (op == "<=") passed = actual <= expected;
-                            else if (op == "=") passed = actual == expected;
-                            else if (op == "!=") passed = actual != expected;
-                        } else { passed = true; } // Skip unsupported types for now
-
-                        if (!passed) throw Exception(ExceptionType::EXECUTION, "CHECK constraint violation: " + check);
-                    } catch (...) {
-                        /* Ignore */
-                    }
-                }
-            }
-        }
-
-        Tuple to_insert(reordered_values, table_info_->schema_);
-
-        // --- STEP 3: OPTIMIZED FOREIGN KEY CHECKS (INDEX LOOKUP) ---
-        for (const auto &fk: table_info_->foreign_keys_) {
-            TableMetadata *ref_table = exec_ctx_->GetCatalog()->GetTable(fk.ref_table);
-            if (!ref_table) throw Exception(ExceptionType::EXECUTION, "Referenced table not found");
-
-            auto ref_indexes = exec_ctx_->GetCatalog()->GetTableIndexes(fk.ref_table);
-
-            for (size_t fk_idx = 0; fk_idx < fk.columns.size(); fk_idx++) {
-                const std::string &local_col = fk.columns[fk_idx];
-                const std::string &ref_col = fk.ref_columns[fk_idx];
-
-                int local_col_idx = table_info_->schema_.GetColIdx(local_col);
-                int ref_col_idx = ref_table->schema_.GetColIdx(ref_col);
-                const Value &fk_value = reordered_values[local_col_idx];
-
-                bool found = false;
-
-                // STRATEGY A: Try Index Lookup
-                for (auto *index: ref_indexes) {
-                    if (index->col_name_ == ref_col) {
-                        GenericKey<8> key;
-                        key.SetFromValue(fk_value);
-                        std::vector<RID> result_rids;
-                        index->b_plus_tree_->GetValue(key, &result_rids, txn_);
-                        if (!result_rids.empty()) {
-                            found = true;
+                // Type Compatibility
+                if (val.GetTypeId() != col.GetType()) {
+                    if (col.GetType() == TypeId::INTEGER && val.GetTypeId() == TypeId::VARCHAR) {
+                        try { std::stoi(val.GetAsString()); } catch (...) {
+                            throw Exception(ExceptionType::EXECUTION, "Type mismatch INT");
                         }
-                        break;
+                    } else if (col.GetType() == TypeId::DECIMAL && val.GetTypeId() == TypeId::VARCHAR) {
+                        try { std::stod(val.GetAsString()); } catch (...) {
+                            throw Exception(ExceptionType::EXECUTION, "Type mismatch DECIMAL");
+                        }
+                    } else {
+                        throw Exception(ExceptionType::EXECUTION, "Type mismatch");
                     }
                 }
 
-                // STRATEGY B: Fallback to Heap Scan
-                if (!found) {
-                    bool index_existed = false;
-                    for (auto *index: ref_indexes) { if (index->col_name_ == ref_col) index_existed = true; }
+                // CHECK Constraints (Simplified Parsing)
+                if (col.HasCheckConstraint()) {
+                    std::string check = col.GetCheckConstraint();
+                    size_t op_pos = std::string::npos;
+                    std::string op;
+                    if (check.find(">=") != std::string::npos) {
+                        op_pos = check.find(">=");
+                        op = ">=";
+                    } else if (check.find("<=") != std::string::npos) {
+                        op_pos = check.find("<=");
+                        op = "<=";
+                    } else if (check.find("!=") != std::string::npos) {
+                        op_pos = check.find("!=");
+                        op = "!=";
+                    } else if (check.find("=") != std::string::npos) {
+                        op_pos = check.find("=");
+                        op = "=";
+                    } else if (check.find(">") != std::string::npos) {
+                        op_pos = check.find(">");
+                        op = ">";
+                    } else if (check.find("<") != std::string::npos) {
+                        op_pos = check.find("<");
+                        op = "<";
+                    }
 
-                    if (!index_existed) {
-                        page_id_t curr_page_id = ref_table->first_page_id_;
-                        auto *bpm = exec_ctx_->GetBufferPoolManager();
-                        while (curr_page_id != INVALID_PAGE_ID && !found) {
-                            Page *page = bpm->FetchPage(curr_page_id);
-                            if (!page) break;
-                            auto *table_page = reinterpret_cast<TablePage *>(page->GetData());
-                            for (uint32_t slot = 0; slot < table_page->GetTupleCount(); slot++) {
-                                RID rid(curr_page_id, slot);
-                                Tuple existing_tuple;
-                                if (table_page->GetTuple(rid, &existing_tuple, txn_)) {
-                                    Value existing_val = existing_tuple.GetValue(ref_table->schema_, ref_col_idx);
-                                    // NO CMP BOOL HERE - MANUAL CHECK
-                                    bool matches = false;
-                                    if (existing_val.GetTypeId() == fk_value.GetTypeId()) {
-                                        if (existing_val.GetTypeId() == TypeId::INTEGER)
-                                            matches = existing_val.GetAsInteger() == fk_value.GetAsInteger();
-                                        else if (existing_val.GetTypeId() == TypeId::VARCHAR)
-                                            matches = existing_val.GetAsString() == fk_value.GetAsString();
-                                        else if (existing_val.GetTypeId() == TypeId::DECIMAL)
-                                            matches = std::abs(existing_val.GetAsDouble() - fk_value.GetAsDouble()) <
-                                                      0.0001;
-                                    }
-                                    if (matches) {
-                                        found = true;
-                                        break;
+                    if (op_pos != std::string::npos) {
+                        try {
+                            std::string right_side = check.substr(op_pos + op.length());
+                            while (!right_side.empty() && isspace(right_side.front())) right_side.erase(0, 1);
+
+                            bool passed = false;
+                            if (val.GetTypeId() == TypeId::INTEGER) {
+                                int actual = (val.GetTypeId() == TypeId::VARCHAR)
+                                                 ? std::stoi(val.GetAsString())
+                                                 : val.GetAsInteger();
+                                int expected = std::stoi(right_side);
+                                if (op == ">") passed = actual > expected;
+                                else if (op == ">=") passed = actual >= expected;
+                                else if (op == "<") passed = actual < expected;
+                                else if (op == "<=") passed = actual <= expected;
+                                else if (op == "=") passed = actual == expected;
+                                else if (op == "!=") passed = actual != expected;
+                            } else { passed = true; } // Skip unsupported types for now
+
+                            if (!passed) throw Exception(ExceptionType::EXECUTION, "CHECK constraint violation: " + check);
+                        } catch (...) {
+                            /* Ignore */
+                        }
+                    }
+                }
+            }
+
+            Tuple to_insert(reordered_values, table_info_->schema_);
+
+            // --- STEP 3: OPTIMIZED FOREIGN KEY CHECKS (INDEX LOOKUP) ---
+            for (const auto &fk: table_info_->foreign_keys_) {
+                TableMetadata *ref_table = exec_ctx_->GetCatalog()->GetTable(fk.ref_table);
+                if (!ref_table) throw Exception(ExceptionType::EXECUTION, "Referenced table not found");
+
+                auto ref_indexes = exec_ctx_->GetCatalog()->GetTableIndexes(fk.ref_table);
+
+                for (size_t fk_idx = 0; fk_idx < fk.columns.size(); fk_idx++) {
+                    const std::string &local_col = fk.columns[fk_idx];
+                    const std::string &ref_col = fk.ref_columns[fk_idx];
+
+                    int local_col_idx = table_info_->schema_.GetColIdx(local_col);
+                    int ref_col_idx = ref_table->schema_.GetColIdx(ref_col);
+                    const Value &fk_value = reordered_values[local_col_idx];
+
+                    bool found = false;
+
+                    // STRATEGY A: Try Index Lookup
+                    for (auto *index: ref_indexes) {
+                        if (index->col_name_ == ref_col) {
+                            GenericKey<8> key;
+                            key.SetFromValue(fk_value);
+                            std::vector<RID> result_rids;
+                            index->b_plus_tree_->GetValue(key, &result_rids, txn_);
+                            if (!result_rids.empty()) {
+                                found = true;
+                            }
+                            break;
+                        }
+                    }
+
+                    // STRATEGY B: Fallback to Heap Scan
+                    if (!found) {
+                        bool index_existed = false;
+                        for (auto *index: ref_indexes) { if (index->col_name_ == ref_col) index_existed = true; }
+
+                        if (!index_existed) {
+                            page_id_t curr_page_id = ref_table->first_page_id_;
+                            auto *bpm = exec_ctx_->GetBufferPoolManager();
+                            while (curr_page_id != INVALID_PAGE_ID && !found) {
+                                Page *page = bpm->FetchPage(curr_page_id);
+                                if (!page) break;
+                                auto *table_page = reinterpret_cast<TablePage *>(page->GetData());
+                                for (uint32_t slot = 0; slot < table_page->GetTupleCount(); slot++) {
+                                    RID rid(curr_page_id, slot);
+                                    Tuple existing_tuple;
+                                    if (table_page->GetTuple(rid, &existing_tuple, txn_)) {
+                                        Value existing_val = existing_tuple.GetValue(ref_table->schema_, ref_col_idx);
+                                        // NO CMP BOOL HERE - MANUAL CHECK
+                                        bool matches = false;
+                                        if (existing_val.GetTypeId() == fk_value.GetTypeId()) {
+                                            if (existing_val.GetTypeId() == TypeId::INTEGER)
+                                                matches = existing_val.GetAsInteger() == fk_value.GetAsInteger();
+                                            else if (existing_val.GetTypeId() == TypeId::VARCHAR)
+                                                matches = existing_val.GetAsString() == fk_value.GetAsString();
+                                            else if (existing_val.GetTypeId() == TypeId::DECIMAL)
+                                                matches = std::abs(existing_val.GetAsDouble() - fk_value.GetAsDouble()) <
+                                                          0.0001;
+                                        }
+                                        if (matches) {
+                                            found = true;
+                                            break;
+                                        }
                                     }
                                 }
+                                bpm->UnpinPage(curr_page_id, false);
+                                curr_page_id = table_page->GetNextPageId();
                             }
-                            bpm->UnpinPage(curr_page_id, false);
-                            curr_page_id = table_page->GetNextPageId();
                         }
                     }
-                }
 
-                if (!found) {
-                    throw Exception(ExceptionType::EXECUTION, "FOREIGN KEY violation: " + local_col);
+                    if (!found) {
+                        throw Exception(ExceptionType::EXECUTION, "FOREIGN KEY violation: " + local_col);
+                    }
                 }
             }
-        }
 
-        // --- STEP 4: PRIMARY KEY UNIQUENESS (INDEX ONLY) ---
-        auto table_indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
-        for (auto *index: table_indexes) {
-            int col_idx = table_info_->schema_.GetColIdx(index->col_name_);
-            if (col_idx >= 0 && table_info_->schema_.GetColumn(col_idx).IsPrimaryKey()) {
+            // --- STEP 4: PRIMARY KEY UNIQUENESS (INDEX ONLY) ---
+            auto table_indexes = exec_ctx_->GetCatalog()->GetTableIndexes(plan_->table_name_);
+            for (auto *index: table_indexes) {
+                int col_idx = table_info_->schema_.GetColIdx(index->col_name_);
+                if (col_idx >= 0 && table_info_->schema_.GetColumn(col_idx).IsPrimaryKey()) {
+                    GenericKey<8> key;
+                    key.SetFromValue(reordered_values[col_idx]);
+                    std::vector<RID> result_rids;
+                    index->b_plus_tree_->GetValue(key, &result_rids, txn_);
+                    if (!result_rids.empty()) {
+                        throw Exception(ExceptionType::EXECUTION, "PRIMARY KEY violation: Duplicate");
+                    }
+                }
+            }
+
+            // --- STEP 5: PHYSICAL INSERT ---
+            RID rid;
+            bool success = table_info_->table_heap_->InsertTuple(to_insert, &rid, txn_);
+            if (!success) throw Exception(ExceptionType::EXECUTION, "Failed to insert tuple");
+
+            // Track modification
+            if (txn_) {
+                Tuple empty_tuple;
+                txn_->AddModifiedTuple(rid, empty_tuple, false, plan_->table_name_);
+
+                if (exec_ctx_->GetLogManager()) {
+                    std::string tuple_str;
+                    tuple_str.reserve(reordered_values.size() * 10);
+                    for (size_t i = 0; i < reordered_values.size(); i++) {
+                        if (i > 0) tuple_str += "|";
+                        tuple_str += reordered_values[i].ToString();
+                    }
+                    Value log_val(TypeId::VARCHAR, tuple_str);
+                    LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(),
+                                      LogRecordType::INSERT, plan_->table_name_, log_val);
+                    auto lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
+                    txn_->SetPrevLSN(lsn);
+                }
+            }
+
+            // --- STEP 6: UPDATE INDEXES ---
+            for (auto *index: table_indexes) {
+                int col_idx = table_info_->schema_.GetColIdx(index->col_name_);
                 GenericKey<8> key;
                 key.SetFromValue(reordered_values[col_idx]);
-                std::vector<RID> result_rids;
-                index->b_plus_tree_->GetValue(key, &result_rids, txn_);
-                if (!result_rids.empty()) {
-                    throw Exception(ExceptionType::EXECUTION, "PRIMARY KEY violation: Duplicate");
-                }
+                index->b_plus_tree_->Insert(key, rid, txn_);
             }
-        }
 
-        // --- STEP 5: PHYSICAL INSERT ---
-        RID rid;
-        bool success = table_info_->table_heap_->InsertTuple(to_insert, &rid, txn_);
-        if (!success) throw Exception(ExceptionType::EXECUTION, "Failed to insert tuple");
-
-        // Track modification
-        if (txn_) {
-            Tuple empty_tuple;
-            txn_->AddModifiedTuple(rid, empty_tuple, false, plan_->table_name_);
-
-            if (exec_ctx_->GetLogManager()) {
-                std::string tuple_str;
-                tuple_str.reserve(reordered_values.size() * 10);
-                for (size_t i = 0; i < reordered_values.size(); i++) {
-                    if (i > 0) tuple_str += "|";
-                    tuple_str += reordered_values[i].ToString();
-                }
-                Value log_val(TypeId::VARCHAR, tuple_str);
-                LogRecord log_rec(txn_->GetTransactionId(), txn_->GetPrevLSN(),
-                                  LogRecordType::INSERT, plan_->table_name_, log_val);
-                auto lsn = exec_ctx_->GetLogManager()->AppendLogRecord(log_rec);
-                txn_->SetPrevLSN(lsn);
-            }
-        }
-
-        // --- STEP 6: UPDATE INDEXES ---
-        for (auto *index: table_indexes) {
-            int col_idx = table_info_->schema_.GetColIdx(index->col_name_);
-            GenericKey<8> key;
-            key.SetFromValue(reordered_values[col_idx]);
-            index->b_plus_tree_->Insert(key, rid, txn_);
+            current_row_idx_++;
+            inserted_count_++;
         }
 
         is_finished_ = true;
-        return true;
+        return inserted_count_ > 0;
     }
 
     const Schema *InsertExecutor::GetOutputSchema() {

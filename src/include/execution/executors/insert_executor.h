@@ -28,6 +28,9 @@ namespace chronosdb {
         bool Next(Tuple *tuple) override;
         const Schema *GetOutputSchema() override;
 
+        // Get the number of rows inserted (for multi-row insert support)
+        size_t GetInsertedCount() const { return inserted_count_; }
+
     private:
         InsertStatement *plan_;
         TableMetadata *table_info_;
@@ -35,6 +38,8 @@ namespace chronosdb {
         Transaction *txn_;
         std::vector<IndexInfo *> table_indexes_;
         std::vector<CachedConstraint> cached_constraints_;
+        size_t current_row_idx_ = 0;  // For multi-row insert support
+        size_t inserted_count_ = 0;   // Track number of rows inserted
     };
 
 } // namespace chronosdb

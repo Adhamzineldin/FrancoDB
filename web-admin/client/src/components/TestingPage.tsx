@@ -69,7 +69,7 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '┌─────────────────────────────────────────────────────────┐');
     addLog('info', '│ TEST 1: Setup                                           │');
     addLog('info', '└─────────────────────────────────────────────────────────┘');
-    await execQuery('DROP TABLE IF EXISTS tt_test;');
+    await execQuery('2EMSA7 GADWAL tt_test;');  // DROP TABLE in Franco
     const c1 = await execQuery('CREATE TABLE tt_test (id INTEGER PRIMARY KEY, name GOMLA, balance INTEGER);');
     testResults.push({ testName: 'Setup', success: !c1.error, duration: c1.duration });
 
@@ -189,15 +189,17 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '┌─────────────────────────────────────────────────────────┐');
     addLog('info', '│ TEST 3: Learning Engine Training                        │');
     addLog('info', '└─────────────────────────────────────────────────────────┘');
-    await execQuery('DROP TABLE IF EXISTS ai_test;');
+    await execQuery('2EMSA7 GADWAL ai_test;');  // DROP TABLE in Franco
     await execQuery('CREATE TABLE ai_test (id INTEGER PRIMARY KEY, val INTEGER, data GOMLA);');
     await execQuery('CREATE INDEX idx_ai_val ON ai_test(val);');
 
-    // Insert rows one by one (ChronosDB doesn't support multi-row INSERT)
+    // Insert rows using multi-row INSERT for efficiency
     addLog('info', '   Inserting 100 rows for training...');
+    const aiValues = [];
     for (let i = 0; i < 100; i++) {
-      await api.executeQuery(`INSERT INTO ai_test VALUES (${i}, ${Math.floor(Math.random()*100)}, 'd${i}');`);
+      aiValues.push(`(${i}, ${Math.floor(Math.random()*100)}, 'd${i}')`);
     }
+    await execQuery(`INSERT INTO ai_test VALUES ${aiValues.join(', ')};`, 'Multi-row INSERT 100 rows');
     addLog('success', '   ✓ Inserted 100 rows');
 
     addLog('info', '   Running 20 queries to train Learning Engine...');
@@ -209,7 +211,7 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     const avg = times.reduce((a,b)=>a+b,0)/times.length;
     addLog('metric', `   Avg: ${avg.toFixed(2)}ms | Min: ${Math.min(...times).toFixed(2)}ms | Max: ${Math.max(...times).toFixed(2)}ms`);
     testResults.push({ testName: 'Learning', success: true, duration: times.reduce((a,b)=>a+b,0), metrics: { avg } });
-    await execQuery('DROP TABLE IF EXISTS ai_test;');
+    await execQuery('2EMSA7 GADWAL ai_test;');  // DROP TABLE in Franco
 
     // ============ IMMUNE SYSTEM TESTS ============
     addLog('info', '');
@@ -227,14 +229,16 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '┌─────────────────────────────────────────────────────────┐');
     addLog('info', '│ TEST 4: Immune System - Setup                           │');
     addLog('info', '└─────────────────────────────────────────────────────────┘');
-    await execQuery('DROP TABLE IF EXISTS immune_test;');
+    await execQuery('2EMSA7 GADWAL immune_test;');  // DROP TABLE in Franco
     await execQuery('CREATE TABLE immune_test (id INTEGER PRIMARY KEY, value INTEGER, data GOMLA);');
 
-    // First populate with baseline data (small inserts - no anomaly)
+    // First populate with baseline data using multi-row INSERT
     addLog('info', '   Establishing baseline with small operations...');
+    const immuneValues = [];
     for (let i = 0; i < 100; i++) {
-      await api.executeQuery(`INSERT INTO immune_test VALUES (${i}, ${Math.random()*100|0}, 'd${i}');`);
+      immuneValues.push(`(${i}, ${Math.random()*100|0}, 'd${i}')`);
     }
+    await execQuery(`INSERT INTO immune_test VALUES ${immuneValues.join(', ')};`, 'Multi-row INSERT 100 rows');
     addLog('success', '   ✓ Inserted 100 rows (no anomaly expected)');
     testResults.push({ testName: 'Immune Setup', success: true, duration: 0 });
 
@@ -272,11 +276,13 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '└─────────────────────────────────────────────────────────┘');
     addLog('info', '   ⚠️ This may BLOCK the table temporarily!');
 
-    // Need to add more rows first
+    // Need to add more rows first using multi-row INSERT
     addLog('info', '   Adding more rows for medium severity test...');
+    const mediumValues = [];
     for (let i = 100; i < 350; i++) {
-      await api.executeQuery(`INSERT INTO immune_test VALUES (${i}, ${Math.random()*100|0}, 'd${i}');`);
+      mediumValues.push(`(${i}, ${Math.random()*100|0}, 'd${i}')`);
     }
+    await execQuery(`INSERT INTO immune_test VALUES ${mediumValues.join(', ')};`, 'Multi-row INSERT 250 rows');
     addLog('success', '   ✓ Inserted 250 more rows');
 
     addLog('info', '   ⚠️ Performing mass DELETE affecting 250 rows...');
@@ -308,14 +314,16 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '   🚨 WARNING: This triggers auto-recovery mechanism!');
 
     // Create a new table for high severity test
-    await execQuery('DROP TABLE IF EXISTS immune_high_test;');
+    await execQuery('2EMSA7 GADWAL immune_high_test;');  // DROP TABLE in Franco
     await execQuery('CREATE TABLE immune_high_test (id INTEGER PRIMARY KEY, val INTEGER);');
 
-    // Insert 600 rows one by one
+    // Insert 600 rows using multi-row INSERT
     addLog('info', '   Preparing 600 rows for HIGH severity test...');
+    const highValues = [];
     for (let i = 0; i < 600; i++) {
-      await api.executeQuery(`INSERT INTO immune_high_test VALUES (${i}, ${Math.random()*100|0});`);
+      highValues.push(`(${i}, ${Math.random()*100|0})`);
     }
+    await execQuery(`INSERT INTO immune_high_test VALUES ${highValues.join(', ')};`, 'Multi-row INSERT 600 rows');
     addLog('success', '   ✓ Inserted 600 rows');
 
     addLog('info', '   🚨 Performing mass DELETE affecting 550 rows...');
@@ -366,8 +374,8 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '┌─────────────────────────────────────────────────────────┐');
     addLog('info', '│ CLEANUP                                                 │');
     addLog('info', '└─────────────────────────────────────────────────────────┘');
-    await execQuery('DROP TABLE IF EXISTS immune_test;');
-    await execQuery('DROP TABLE IF EXISTS immune_high_test;');
+    await execQuery('2EMSA7 GADWAL immune_test;');
+    await execQuery('2EMSA7 GADWAL immune_high_test;');
 
     const total = performance.now() - t0;
     const passed = testResults.filter(r => r.success).length;
@@ -401,11 +409,13 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '┌─────────────────────────────────────────────────────────┐');
     addLog('info', '│ PHASE 1: Setup                                          │');
     addLog('info', '└─────────────────────────────────────────────────────────┘');
-    await execQuery('DROP TABLE IF EXISTS p_idx;');
-    await execQuery('DROP TABLE IF EXISTS p_seq;');
-    await execQuery('CREATE TABLE p_idx (id INTEGER PRIMARY KEY, val INTEGER, data GOMLA);');
-    await execQuery('CREATE TABLE p_seq (id INTEGER PRIMARY KEY, val INTEGER, data GOMLA);');
+    // Use 2EMSA7 GADWAL for Franco compatibility
+    await execQuery('2EMSA7 GADWAL p_idx;');
+    await execQuery('2EMSA7 GADWAL p_seq;');
+    await execQuery('CREATE TABLE p_idx (id INTEGER PRIMARY KEY, val INTEGER);');
+    await execQuery('CREATE TABLE p_seq (id INTEGER PRIMARY KEY, val INTEGER);');
     await execQuery('CREATE INDEX idx_p ON p_idx(val);');
+    // NO index on p_seq - this is the sequential scan table
 
     // Insert
     addLog('info', '');
@@ -413,12 +423,33 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog('info', '│ PHASE 2: Insert Data                                    │');
     addLog('info', '└─────────────────────────────────────────────────────────┘');
     const insStart = performance.now();
-    // Insert rows one by one (ChronosDB doesn't support multi-row INSERT)
-    for (let i = 0; i < perfConfig.rowCount; i++) {
-      await api.executeQuery(`INSERT INTO p_idx VALUES (${i}, ${Math.floor(Math.random()*1000)}, 'd${i}');`);
-      await api.executeQuery(`INSERT INTO p_seq VALUES (${i}, ${Math.floor(Math.random()*1000)}, 'd${i}');`);
-      if ((i+1)%Math.ceil(perfConfig.rowCount/10)===0 || i===perfConfig.rowCount-1) {
-        addLog('info', `   ${((i+1)/perfConfig.rowCount*100).toFixed(0)}% (${(i+1).toLocaleString()} rows)`);
+
+    // Use multi-row INSERT for better performance
+    const BATCH_SIZE = 100; // Number of rows per INSERT statement
+    const totalBatches = Math.ceil(perfConfig.rowCount / BATCH_SIZE);
+
+    for (let batch = 0; batch < totalBatches; batch++) {
+      const startIdx = batch * BATCH_SIZE;
+      const endIdx = Math.min(startIdx + BATCH_SIZE, perfConfig.rowCount);
+
+      // Build multi-row INSERT for p_idx
+      const idxValues = [];
+      const seqValues = [];
+      for (let i = startIdx; i < endIdx; i++) {
+        idxValues.push(`(${i}, ${Math.floor(Math.random()*1000)})`);
+        seqValues.push(`(${i}, ${Math.floor(Math.random()*1000)})`);
+      }
+
+      // Execute both inserts using batch API for efficiency
+      await api.batchQuery([
+        `INSERT INTO p_idx VALUES ${idxValues.join(', ')};`,
+        `INSERT INTO p_seq VALUES ${seqValues.join(', ')};`
+      ]);
+
+      // Progress update
+      const progress = Math.min(100, ((batch + 1) / totalBatches * 100));
+      if ((batch + 1) % Math.ceil(totalBatches / 10) === 0 || batch === totalBatches - 1) {
+        addLog('info', `   ${progress.toFixed(0)}% (${endIdx.toLocaleString()} rows)`);
       }
     }
     const insDur = performance.now() - insStart;
@@ -471,8 +502,8 @@ export default function TestingPage({ currentDb }: { currentDb: string }) {
     addLog(imp > 0 ? 'success' : 'info', imp > 0 ? `   ✓ Index ${imp.toFixed(1)}% faster (${speedup.toFixed(2)}x)` : `   Seq ${Math.abs(imp).toFixed(1)}% faster (small dataset)`);
     testResults.push({ testName: 'Comparison', success: true, duration: 0, metrics: { speedup, improvement: imp } });
 
-    await execQuery('DROP TABLE IF EXISTS p_idx;');
-    await execQuery('DROP TABLE IF EXISTS p_seq;');
+    await execQuery('2EMSA7 GADWAL p_idx;');
+    await execQuery('2EMSA7 GADWAL p_seq;');
     const total = performance.now() - t0;
     addLog('info', '═══════════════════════════════════════════════════════════');
     addLog('metric', `   Total: ${(total/1000).toFixed(1)}s | Speedup: ${speedup.toFixed(2)}x`);

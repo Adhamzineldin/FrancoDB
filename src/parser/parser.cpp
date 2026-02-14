@@ -628,6 +628,7 @@ namespace chronosdb {
     }
 
     // EMLA GOWA users ELKEYAM (1, 'Ahmed', AH, 10.5);
+    // Multi-row support: EMLA GOWA users ELKEYAM (1, 'Ahmed'), (2, 'Ali'), (3, 'Omar');
     std::unique_ptr<InsertStatement> Parser::ParseInsert() {
         auto stmt = std::make_unique<InsertStatement>();
         Advance(); // EMLA
@@ -650,13 +651,46 @@ namespace chronosdb {
         }
 
         if (!Match(TokenType::VALUES)) throw Exception(ExceptionType::PARSER, "Expected ELKEYAM");
+
+        // Parse first value row
         if (!Match(TokenType::L_PAREN)) throw Exception(ExceptionType::PARSER, "Expected (");
 
+        std::vector<Value> first_row;
         while (current_token_.type != TokenType::R_PAREN) {
-            stmt->values_.push_back(ParseValue());
+            first_row.push_back(ParseValue());
             if (current_token_.type == TokenType::COMMA) Advance();
         }
         Advance(); // )
+
+        // Check if there are more rows (multi-row insert)
+        if (current_token_.type == TokenType::COMMA) {
+            // Multi-row insert: add first row and continue parsing more rows
+            stmt->value_rows_.push_back(std::move(first_row));
+
+            while (current_token_.type == TokenType::COMMA) {
+                Advance(); // Eat comma
+
+                if (!Match(TokenType::L_PAREN)) throw Exception(ExceptionType::PARSER, "Expected ( for next row");
+
+                std::vector<Value> row;
+                while (current_token_.type != TokenType::R_PAREN) {
+                    row.push_back(ParseValue());
+                    if (current_token_.type == TokenType::COMMA) Advance();
+                }
+                Advance(); // )
+
+                // Validate row has same number of values as first row
+                if (row.size() != stmt->value_rows_[0].size()) {
+                    throw Exception(ExceptionType::PARSER,
+                        "All rows must have the same number of values");
+                }
+
+                stmt->value_rows_.push_back(std::move(row));
+            }
+        } else {
+            // Single row insert: use values_ for backward compatibility
+            stmt->values_ = std::move(first_row);
+        }
 
         if (!Match(TokenType::SEMICOLON)) throw Exception(ExceptionType::PARSER, "Expected ;");
         return stmt;

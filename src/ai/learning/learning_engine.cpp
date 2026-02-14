@@ -1,12 +1,14 @@
 #include "ai/learning/learning_engine.h"
 #include "ai/learning/query_plan_optimizer.h"
 #include "ai/ai_config.h"
+#include "ai/ai_scheduler.h"
 #include "ai/metrics_store.h"
 #include "common/logger.h"
 #include "parser/statement.h"
 
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 
 namespace chronosdb {
@@ -85,7 +87,16 @@ ExecutionPlan LearningEngine::OptimizeQuery(
 
 void LearningEngine::RecordExecutionFeedback(const ExecutionFeedback& feedback) {
     if (!active_.load()) return;
-    plan_optimizer_->RecordFeedback(feedback);
+
+    // Record feedback asynchronously to not block query execution
+    // Make a copy for the async task
+    auto feedback_copy = std::make_shared<ExecutionFeedback>(feedback);
+    AIScheduler::Instance().ScheduleOnce(
+        "LearningEngine::RecordFeedback",
+        0, // Execute immediately on worker thread
+        [this, feedback_copy]() {
+            plan_optimizer_->RecordFeedback(*feedback_copy);
+        });
 }
 
 QueryPlanOptimizer* LearningEngine::GetPlanOptimizer() const {

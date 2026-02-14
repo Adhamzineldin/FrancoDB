@@ -300,6 +300,7 @@ HttpResponse HttpHandler::Route(const HttpRequest& req) {
     if (p == "/api/databases/create" && req.method == HttpMethod::POST) return HandleCreateDatabase(req);
     if (p == "/api/tables" && req.method == HttpMethod::GET) return HandleGetTables(req);
     if (p == "/api/query" && req.method == HttpMethod::POST) return HandleQuery(req);
+    if (p == "/api/query/batch" && req.method == HttpMethod::POST) return HandleBatchQuery(req);
     if (p == "/api/users" && req.method == HttpMethod::GET) return HandleGetUsers(req);
     if (p == "/api/users" && req.method == HttpMethod::POST) return HandleCreateUser(req);
     if (p == "/api/status" && req.method == HttpMethod::GET) return HandleGetStatus(req);
@@ -567,6 +568,86 @@ HttpResponse HttpHandler::HandleQuery(const HttpRequest& req) {
         }
     }
     resp.SetJson(json);
+    return resp;
+}
+
+HttpResponse HttpHandler::HandleBatchQuery(const HttpRequest& req) {
+    auto* session = GetSession(req);
+    HttpResponse resp;
+    if (!session) { resp.SetError(401, "Not authenticated"); return resp; }
+
+    // Parse JSON array of SQL statements: {"queries": ["sql1", "sql2", ...]}
+    std::string queries_str = ParseJsonField(req.body, "queries");
+    if (queries_str.empty()) {
+        resp.SetError(400, "Queries array required");
+        return resp;
+    }
+
+    // Simple JSON array parsing
+    std::vector<std::string> queries;
+    size_t pos = 0;
+    while ((pos = queries_str.find('"', pos)) != std::string::npos) {
+        size_t start = pos + 1;
+        size_t end = queries_str.find('"', start);
+        while (end != std::string::npos && end > 0 && queries_str[end - 1] == '\\') {
+            end = queries_str.find('"', end + 1);
+        }
+        if (end == std::string::npos) break;
+        std::string query = queries_str.substr(start, end - start);
+        // Unescape basic JSON escapes
+        size_t p = 0;
+        while ((p = query.find("\\\"", p)) != std::string::npos) {
+            query.replace(p, 2, "\"");
+            p++;
+        }
+        p = 0;
+        while ((p = query.find("\\n", p)) != std::string::npos) {
+            query.replace(p, 2, "\n");
+            p++;
+        }
+        p = 0;
+        while ((p = query.find("\\\\", p)) != std::string::npos) {
+            query.replace(p, 2, "\\");
+            p++;
+        }
+        queries.push_back(query);
+        pos = end + 1;
+    }
+
+    if (queries.empty()) {
+        resp.SetError(400, "No valid queries found");
+        return resp;
+    }
+
+    // Execute all queries and collect results
+    std::ostringstream json;
+    json << "{\n  \"success\": true,\n  \"total_queries\": " << queries.size();
+    json << ",\n  \"results\": [";
+
+    size_t success_count = 0;
+    size_t failure_count = 0;
+
+    for (size_t i = 0; i < queries.size(); i++) {
+        auto result = ExecuteSQL(queries[i], session);
+        if (result.success) success_count++;
+        else failure_count++;
+
+        if (i > 0) json << ",";
+        json << "\n    {\"index\": " << i;
+        json << ", \"success\": " << (result.success ? "true" : "false");
+        if (!result.success) {
+            json << ", \"error\": \"" << JsonEscape(result.message) << "\"";
+        } else if (result.rows_affected > 0) {
+            json << ", \"rows_affected\": " << result.rows_affected;
+        }
+        json << "}";
+    }
+
+    json << "\n  ],\n  \"success_count\": " << success_count;
+    json << ",\n  \"failure_count\": " << failure_count;
+    json << "\n}";
+
+    resp.SetJson(json.str());
     return resp;
 }
 
@@ -1035,6 +1116,29 @@ std::string HttpHandler::JsonEscape(const std::string& s) {
     return out;
 }
 
+// Helper: Decode JSON escape sequences in a string
+static std::string DecodeJsonString(const std::string& s) {
+    std::string result;
+    result.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            char next = s[i + 1];
+            switch (next) {
+                case 'n': result += '\n'; ++i; break;
+                case 'r': result += '\r'; ++i; break;
+                case 't': result += '\t'; ++i; break;
+                case '\\': result += '\\'; ++i; break;
+                case '"': result += '"'; ++i; break;
+                case '/': result += '/'; ++i; break;
+                default: result += s[i]; break;  // Keep backslash for unknown escapes
+            }
+        } else {
+            result += s[i];
+        }
+    }
+    return result;
+}
+
 std::string HttpHandler::ParseJsonField(const std::string& json, const std::string& field) {
     std::string key = "\"" + field + "\"";
     size_t pos = json.find(key);
@@ -1045,16 +1149,57 @@ std::string HttpHandler::ParseJsonField(const std::string& json, const std::stri
     pos++;
 
     // Skip whitespace
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) pos++;
 
     if (pos >= json.size()) return "";
 
     if (json[pos] == '"') {
-        // String value
+        // String value - extract and decode JSON escapes
         pos++;
         size_t end = pos;
         while (end < json.size() && json[end] != '"') {
             if (json[end] == '\\') end++; // Skip escaped char
+            end++;
+        }
+        std::string raw = json.substr(pos, end - pos);
+        return DecodeJsonString(raw);
+    }
+
+    // Handle JSON array
+    if (json[pos] == '[') {
+        int bracket_count = 1;
+        size_t end = pos + 1;
+        while (end < json.size() && bracket_count > 0) {
+            if (json[end] == '[') bracket_count++;
+            else if (json[end] == ']') bracket_count--;
+            else if (json[end] == '"') {
+                // Skip string content
+                end++;
+                while (end < json.size() && json[end] != '"') {
+                    if (json[end] == '\\') end++;
+                    end++;
+                }
+            }
+            end++;
+        }
+        return json.substr(pos, end - pos);
+    }
+
+    // Handle JSON object
+    if (json[pos] == '{') {
+        int brace_count = 1;
+        size_t end = pos + 1;
+        while (end < json.size() && brace_count > 0) {
+            if (json[end] == '{') brace_count++;
+            else if (json[end] == '}') brace_count--;
+            else if (json[end] == '"') {
+                // Skip string content
+                end++;
+                while (end < json.size() && json[end] != '"') {
+                    if (json[end] == '\\') end++;
+                    end++;
+                }
+            }
             end++;
         }
         return json.substr(pos, end - pos);

@@ -19,7 +19,8 @@ namespace chronosdb {
     struct ExecutionResult {
         bool success = true;
         std::string message;            
-        std::shared_ptr<ResultSet> result_set = nullptr; 
+        std::shared_ptr<ResultSet> result_set = nullptr;
+        size_t rows_affected = 0;  // Number of rows affected by INSERT/UPDATE/DELETE
 
         // Helper Constructors
         static ExecutionResult Message(std::string msg) {
@@ -38,6 +39,13 @@ namespace chronosdb {
         static ExecutionResult Data(std::shared_ptr<ResultSet> rs) {
             ExecutionResult res;
             res.result_set = rs;
+            return res;
+        }
+
+        static ExecutionResult Affected(size_t count, std::string msg = "") {
+            ExecutionResult res;
+            res.rows_affected = count;
+            res.message = std::move(msg);
             return res;
         }
     };

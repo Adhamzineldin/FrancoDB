@@ -1,6 +1,8 @@
 #include "ai/dml_observer.h"
+#include "ai/ai_scheduler.h"
 
 #include <algorithm>
+#include <memory>
 #include <mutex>
 
 namespace chronosdb {
@@ -40,10 +42,27 @@ bool DMLObserverRegistry::NotifyBefore(const DMLEvent& event) {
 }
 
 void DMLObserverRegistry::NotifyAfter(const DMLEvent& event) {
-    std::shared_lock lock(mutex_);
-    for (auto* observer : observers_) {
-        observer->OnAfterDML(event);
+    // Make a copy for async processing
+    auto event_copy = std::make_shared<DMLEvent>(event);
+
+    // Get observers snapshot while holding lock
+    std::vector<IDMLObserver*> observers_snapshot;
+    {
+        std::shared_lock lock(mutex_);
+        observers_snapshot = observers_;
     }
+
+    // Fire async - don't block query execution for AI processing
+    AIScheduler::Instance().ScheduleOnce(
+        "DMLObserver::NotifyAfter",
+        0, // Execute immediately on worker thread
+        [observers_snapshot, event_copy]() {
+            for (auto* observer : observers_snapshot) {
+                if (observer) {
+                    observer->OnAfterDML(*event_copy);
+                }
+            }
+        });
 }
 
 size_t DMLObserverRegistry::GetObserverCount() const {

@@ -8,7 +8,7 @@
 
 namespace chronosdb {
     enum class StatementType {
-        CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, BEGIN, ROLLBACK, COMMIT, CREATE_DB, USE_DB,
+        CREATE, INSERT, SELECT, DELETE_CMD, UPDATE_CMD, DROP, CREATE_INDEX, DROP_INDEX, BEGIN, ROLLBACK, COMMIT, CREATE_DB, USE_DB,
         LOGIN, CREATE_USER, ALTER_USER_ROLE, DELETE_USER, SHOW_USERS, SHOW_DATABASES, SHOW_TABLES, SHOW_STATUS, WHOAMI,
         DROP_DB, CREATE_TABLE,
         DESCRIBE_TABLE, ALTER_TABLE, SHOW_CREATE_TABLE,
@@ -72,15 +72,27 @@ namespace chronosdb {
         bool if_exists_ = false;  // DROP TABLE IF EXISTS
     };
 
+    /** DROP INDEX <name> */
+    class DropIndexStatement : public Statement {
+    public:
+        StatementType GetType() const override { return StatementType::DROP_INDEX; }
+        std::string index_name_;
+        bool if_exists_ = false;
+    };
+
     // --- ROW LEVEL OPS ---
 
-    /** EMLA GOWA <name> ELKEYAM (...) */
+    /** EMLA GOWA <name> ELKEYAM (...) - Supports multi-row insert for efficiency */
     class InsertStatement : public Statement {
     public:
         StatementType GetType() const override { return StatementType::INSERT; }
         std::string table_name_;
         std::vector<std::string> column_names_;
-        std::vector<Value> values_;
+        std::vector<Value> values_;  // For single row insert (backward compatibility)
+        std::vector<std::vector<Value>> value_rows_;  // For multi-row insert
+
+        // Helper to check if this is a multi-row insert
+        bool IsMultiRowInsert() const { return !value_rows_.empty(); }
     };
 
     class SelectStatement : public Statement {

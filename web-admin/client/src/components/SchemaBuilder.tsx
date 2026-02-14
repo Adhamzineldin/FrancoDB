@@ -78,6 +78,7 @@ export default function SchemaBuilder({ currentDb, onTableCreated, onClose }: Sc
     );
   }, []);
 
+  // Generate SQL for preview (multi-line for readability)
   const generateSQL = useCallback(() => {
     if (!tableName.trim()) return '';
 
@@ -92,6 +93,21 @@ export default function SchemaBuilder({ currentDb, onTableCreated, onClose }: Sc
     });
 
     return `CREATE TABLE ${tableName} (\n  ${colDefs.join(',\n  ')}\n);`;
+  }, [tableName, columns]);
+
+  // Generate SQL for execution (single-line to avoid parser issues)
+  const generateExecutableSQL = useCallback(() => {
+    if (!tableName.trim()) return '';
+
+    const colDefs = columns.map(col => {
+      let def = `${col.name} ${col.type}`;
+      if (col.primaryKey) def += ' PRIMARY KEY';
+      if (col.autoIncrement) def += ' AUTO_INCREMENT';
+      if (col.notNull && !col.primaryKey) def += ' NOT NULL';
+      return def;
+    });
+
+    return `CREATE TABLE ${tableName} (${colDefs.join(', ')});`;
   }, [tableName, columns]);
 
   const handleCreate = async () => {
@@ -110,8 +126,8 @@ export default function SchemaBuilder({ currentDb, onTableCreated, onClose }: Sc
     setError('');
 
     try {
-      // Create the table
-      const sql = generateSQL();
+      // Create the table - use single-line SQL to avoid parser issues with multi-line
+      const sql = generateExecutableSQL();
       const result = await api.executeQuery(sql);
 
       if (result.error) {

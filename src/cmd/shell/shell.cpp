@@ -677,19 +677,31 @@ int main(int argc, char* argv[]) {
     }
 
     // -------------------------------------------------------------------------
-    // SHELL LOOP
+    // SHELL LOOP - Supports multi-line commands
     // -------------------------------------------------------------------------
     std::string input;
+    std::string accumulated_input;  // For multi-line command support
+    bool in_multiline = false;
+
     while (connected) {
-        std::cout << username << "@" << current_db << "> ";
-        std::cout.flush(); 
+        // Show different prompt for continuation lines
+        if (in_multiline) {
+            std::cout << "       -> ";
+        } else {
+            std::cout << username << "@" << current_db << "> ";
+        }
+        std::cout.flush();
         
         if (!std::getline(std::cin, input)) break;
-        if (input == "exit" || input == "quit") break;
-        if (input.empty()) continue;
 
-        // --- CLEAR COMMAND ---
-        if (input == "clear" || input == "cls") {
+        // Handle exit only if not in middle of a statement
+        if (!in_multiline && (input == "exit" || input == "quit")) break;
+
+        // Empty input on first line = skip, empty input on continuation = keep going
+        if (input.empty() && !in_multiline) continue;
+
+        // --- CLEAR COMMAND (only on first line) ---
+        if (!in_multiline && (input == "clear" || input == "cls")) {
             #ifdef _WIN32
                 system("cls");
             #else
@@ -698,17 +710,18 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // --- SYNTAX HELP COMMAND ---
-        if (input == "syntax" || input == "help" || input == "SYNTAX" || input == "HELP") {
+        // --- SYNTAX HELP COMMAND (only on first line) ---
+        if (!in_multiline && (input == "syntax" || input == "help" || input == "SYNTAX" || input == "HELP")) {
             DisplayDynamicSyntax();
             continue;
         }
 
-        // --- EXECUTE FSQL FILE (ChronosSQL Script) ---
-        if (input.rfind("run ", 0) == 0 || input.rfind("RUN ", 0) == 0 || 
-            input.rfind("exec ", 0) == 0 || input.rfind("EXEC ", 0) == 0 ||
-            input.rfind("source ", 0) == 0 || input.rfind("SOURCE ", 0) == 0) {
-            
+        // --- EXECUTE FSQL FILE (ChronosSQL Script) - only on first line ---
+        if (!in_multiline &&
+            (input.rfind("run ", 0) == 0 || input.rfind("RUN ", 0) == 0 ||
+             input.rfind("exec ", 0) == 0 || input.rfind("EXEC ", 0) == 0 ||
+             input.rfind("source ", 0) == 0 || input.rfind("SOURCE ", 0) == 0)) {
+
             std::string filepath = input.substr(input.find(' ') + 1);
             
             // Remove trailing semicolon if present
@@ -731,6 +744,38 @@ int main(int argc, char* argv[]) {
             ExecuteFSQLFile(db_client, filepath, current_db);
             continue;
         }
+
+        // Accumulate input for multi-line support
+        if (!accumulated_input.empty()) {
+            accumulated_input += " ";
+        }
+        accumulated_input += input;
+
+        // Check if statement is complete (ends with semicolon)
+        // We need to handle potential semicolons inside strings
+        std::string trimmed = accumulated_input;
+        size_t last_non_space = trimmed.find_last_not_of(" \t\n\r");
+        if (last_non_space != std::string::npos) {
+            trimmed = trimmed.substr(0, last_non_space + 1);
+        }
+
+        if (trimmed.empty()) {
+            accumulated_input.clear();
+            in_multiline = false;
+            continue;
+        }
+
+        // Check if we have a complete statement (ends with semicolon)
+        // Simple check - for more robust handling, we'd need to track if we're inside quotes
+        if (trimmed.back() != ';') {
+            in_multiline = true;
+            continue;  // Wait for more input
+        }
+
+        // Statement is complete - use accumulated input
+        input = accumulated_input;
+        accumulated_input.clear();
+        in_multiline = false;
 
         // --- [FIXED] PROMPT UPDATE LOGIC - Only update on success ---
         std::string upper_input = input;
