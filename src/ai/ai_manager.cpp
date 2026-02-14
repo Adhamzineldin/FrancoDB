@@ -55,6 +55,12 @@ void AIManager::Initialize(Catalog* catalog, IBufferManager* bpm,
         log_manager_, catalog_, bpm_, checkpoint_mgr_);
     temporal_index_mgr_->Start();
 
+    // Phase 4: Schedule periodic maintenance for relearning/adaptation
+    maintenance_task_id_ = AIScheduler::Instance().SchedulePeriodic(
+        "AIManager::PeriodicMaintenance",
+        AI_DECAY_INTERVAL_MS,
+        [this]() { PeriodicMaintenance(); });
+
     initialized_ = true;
 
     // Restore previously learned state from disk
@@ -70,6 +76,12 @@ void AIManager::Shutdown() {
     if (!initialized_.load()) return;
 
     LOG_INFO("AIManager", "Shutting down AI Layer...");
+
+    // Cancel maintenance task
+    if (maintenance_task_id_ != 0) {
+        AIScheduler::Instance().Cancel(maintenance_task_id_);
+        maintenance_task_id_ = 0;
+    }
 
     // Persist learned state to disk before stopping
     if (SaveState()) {
@@ -99,6 +111,23 @@ void AIManager::Shutdown() {
 
     initialized_ = false;
     LOG_INFO("AIManager", "AI Layer shut down");
+}
+
+void AIManager::PeriodicMaintenance() {
+    if (!initialized_.load()) return;
+
+    LOG_INFO("AIManager", "Running periodic AI maintenance (adaptation to workload changes)...");
+
+    // Apply decay to all AI components to allow adaptation
+    if (learning_engine_) {
+        learning_engine_->PeriodicMaintenance();
+    }
+    if (immune_system_) {
+        immune_system_->PeriodicMaintenance();
+    }
+    // Temporal index manager already has its own periodic analysis
+
+    LOG_INFO("AIManager", "AI maintenance complete - all components updated");
 }
 
 bool AIManager::IsInitialized() const {

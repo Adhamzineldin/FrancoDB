@@ -41,6 +41,15 @@ bool ResponseEngine::IsUserBlocked(const std::string& user) const {
     return blocked_users_.count(user) > 0;
 }
 
+bool ResponseEngine::IsInCooldown(const std::string& table_name) const {
+    std::shared_lock lock(cooldown_mutex_);
+    auto it = recovery_cooldown_.find(table_name);
+    if (it == recovery_cooldown_.end()) {
+        return false;
+    }
+    return std::chrono::steady_clock::now() < it->second;
+}
+
 void ResponseEngine::UnblockTable(const std::string& table_name) {
     std::unique_lock lock(blocked_mutex_);
     blocked_tables_.erase(table_name);
@@ -69,6 +78,11 @@ void ResponseEngine::RespondLow(const AnomalyReport& report) {
 }
 
 void ResponseEngine::RespondMedium(const AnomalyReport& report) {
+    // Check if this table is in cooldown or already blocked
+    if (IsInCooldown(report.table_name) || IsTableBlocked(report.table_name)) {
+        return; // Already handled
+    }
+
     LOG_WARN("ImmuneSystem",
              "[ANOMALY MEDIUM] Blocking mutations on table '" +
              report.table_name + "' - " + report.description);
@@ -81,6 +95,12 @@ void ResponseEngine::RespondMedium(const AnomalyReport& report) {
 }
 
 void ResponseEngine::RespondHigh(const AnomalyReport& report) {
+    // Check if this table is in cooldown (recently recovered)
+    if (IsInCooldown(report.table_name)) {
+        // Don't spam recovery - table was already recovered recently
+        return;
+    }
+
     LOG_ERROR("ImmuneSystem",
               "[ANOMALY HIGH] Auto-recovering table '" +
               report.table_name + "' - " + report.description);
@@ -118,8 +138,21 @@ void ResponseEngine::RespondHigh(const AnomalyReport& report) {
                      ", elapsed: " + std::to_string(result.elapsed_ms) + "ms");
 
             // Unblock table after successful recovery
-            std::unique_lock lock(blocked_mutex_);
-            blocked_tables_.erase(report.table_name);
+            {
+                std::unique_lock lock(blocked_mutex_);
+                blocked_tables_.erase(report.table_name);
+            }
+
+            // Set cooldown to prevent re-triggering on this table
+            {
+                std::unique_lock lock(cooldown_mutex_);
+                recovery_cooldown_[report.table_name] =
+                    std::chrono::steady_clock::now() + RECOVERY_COOLDOWN;
+            }
+
+            LOG_INFO("ImmuneSystem",
+                     "[COOLDOWN] Table '" + report.table_name +
+                     "' in cooldown for 60s to prevent re-triggering");
         } else {
             LOG_ERROR("ImmuneSystem",
                       "[AUTO-RECOVERY FAILED] " + result.error_message +

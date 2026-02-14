@@ -74,6 +74,8 @@ namespace chronosdb {
         std::string ParseCheckExpression();
 
         std::unique_ptr<DropDatabaseStatement> ParseDropDatabase();
+        std::unique_ptr<DropStatement> ParseDropTable();
+        std::unique_ptr<DropIndexStatement> ParseDropIndex();
 
         Lexer lexer_;
         Token current_token_;

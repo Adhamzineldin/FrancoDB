@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../api';
 import type { ChronosResult } from '../types';
+import SchemaBuilder from './SchemaBuilder';
 
 interface TableViewerProps {
   currentDb: string;
@@ -16,6 +17,7 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
   const [tab, setTab] = useState<'data' | 'schema'>('data');
+  const [showSchemaBuilder, setShowSchemaBuilder] = useState(false);
 
   const loadTables = useCallback(async () => {
     try {
@@ -69,7 +71,17 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
       <div className="tv-layout">
         {/* Table List Sidebar */}
         <div className="tv-sidebar">
-          <div className="tv-sidebar-header">Tables</div>
+          <div className="tv-sidebar-header">
+            <span>Tables</span>
+            <button
+              className="btn-sm btn-primary"
+              onClick={() => setShowSchemaBuilder(true)}
+              title="Create new table"
+              style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+            >
+              + New
+            </button>
+          </div>
           {tables.map((t) => (
             <button
               key={t}
@@ -211,6 +223,15 @@ export default function TableViewer({ currentDb, selectedTable, onSelectTable }:
           )}
         </div>
       </div>
+
+      {/* Schema Builder Modal */}
+      {showSchemaBuilder && (
+        <SchemaBuilder
+          currentDb={currentDb}
+          onTableCreated={loadTables}
+          onClose={() => setShowSchemaBuilder(false)}
+        />
+      )}
     </div>
   );
 }

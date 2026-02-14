@@ -111,4 +111,28 @@ export const api = {
   getAnomalies: () => request('/ai/anomalies'),
   getExecStats: () => request('/ai/stats'),
   getAIDetailed: () => request<AIDetailedResponse>('/ai/detailed'),
+
+  // Testing
+  runBulkInsert: (config: {
+    tableName?: string;
+    rowCount?: number;
+    withIndex?: boolean;
+    indexColumn?: string;
+    useTimeManipulation?: boolean;
+    startTimestamp?: number;
+    timeIncrementMs?: number;
+    batchSize?: number;
+  }) =>
+    request('/test/bulk-insert', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+
+  runPerformanceCompare: (config: { rowCount?: number; queryCount?: number }) =>
+    request('/test/performance-compare', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+
+  getAIHealth: () => request('/test/ai-health'),
 };

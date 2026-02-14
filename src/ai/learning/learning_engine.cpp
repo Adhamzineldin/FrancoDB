@@ -1,5 +1,6 @@
 #include "ai/learning/learning_engine.h"
 #include "ai/learning/query_plan_optimizer.h"
+#include "ai/ai_config.h"
 #include "ai/metrics_store.h"
 #include "common/logger.h"
 #include "parser/statement.h"
@@ -125,6 +126,33 @@ std::vector<UCB1Bandit::ArmStats> LearningEngine::GetArmStats() const {
 
 uint64_t LearningEngine::GetTotalQueriesObserved() const {
     return total_queries_.load(std::memory_order_relaxed);
+}
+
+void LearningEngine::Decay(double decay_factor) {
+    if (!active_) return;
+
+    LOG_INFO("LearningEngine", "Applying decay factor " +
+             std::to_string(decay_factor) + " to adapt to workload changes");
+
+    // Decay bandit statistics
+    bandit_->Decay(decay_factor);
+
+    // Decay query counter proportionally
+    uint64_t old_queries = total_queries_.load(std::memory_order_relaxed);
+    uint64_t new_queries = static_cast<uint64_t>(old_queries * decay_factor);
+    total_queries_.store(new_queries, std::memory_order_relaxed);
+
+    // Decay optimizer statistics as well
+    plan_optimizer_->Decay(decay_factor);
+}
+
+void LearningEngine::PeriodicMaintenance() {
+    if (!active_) return;
+
+    // Apply periodic decay to allow adaptation to changing workloads
+    Decay(AI_DECAY_FACTOR);
+
+    LOG_INFO("LearningEngine", "Periodic maintenance complete. Current state: " + GetSummary());
 }
 
 void LearningEngine::Start() {

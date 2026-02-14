@@ -24,17 +24,31 @@ std::vector<AnomalyReport> AnomalyDetector::Analyze(
         auto historical = monitor.GetHistoricalRates(
             table, MUTATION_WINDOW_SIZE, RATE_INTERVAL_US);
 
-        // Need sufficient historical intervals for a meaningful z-score.
-        // Too few intervals produce unstable baselines and false positives.
-        // However, if the absolute rate is very high, flag it anyway.
-        if (historical.size() < 10) {
-            if (current_rate >= ABSOLUTE_RATE_THRESHOLD) {
+        // =================================================================
+        // BASELINE REQUIREMENT: Need sufficient history for meaningful analysis
+        // =================================================================
+        // New tables or tables with insufficient history should NOT be flagged
+        // based on Z-score (which would be meaningless with near-zero baseline).
+        // Only flag if the ABSOLUTE rate is extremely high.
+
+        // Count non-zero intervals to see if table has real activity history
+        size_t active_intervals = 0;
+        double total_historical = 0.0;
+        for (double rate : historical) {
+            if (rate > 0.001) {  // Non-trivial activity
+                active_intervals++;
+            }
+            total_historical += rate;
+        }
+
+        // Need at least 10 intervals with actual activity to establish baseline
+        if (active_intervals < 10) {
+            // No established baseline - only flag on EXTREME absolute rates
+            // (e.g., 50+ mutations per second is clearly abnormal)
+            if (current_rate >= ABSOLUTE_RATE_THRESHOLD * 5) {
                 AnomalyReport report;
                 report.table_name = table;
-                report.severity = current_rate >= ABSOLUTE_RATE_THRESHOLD * 5
-                    ? AnomalySeverity::HIGH
-                    : current_rate >= ABSOLUTE_RATE_THRESHOLD * 2
-                        ? AnomalySeverity::MEDIUM : AnomalySeverity::LOW;
+                report.severity = AnomalySeverity::MEDIUM;  // Not HIGH - no auto-recover without baseline
                 report.z_score = current_rate / ABSOLUTE_RATE_THRESHOLD;
                 report.current_rate = current_rate;
                 report.mean_rate = 0.0;
@@ -43,14 +57,18 @@ std::vector<AnomalyReport> AnomalyDetector::Analyze(
                     std::chrono::microseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
                 std::ostringstream desc;
-                desc << "Table '" << table << "' high mutation rate "
+                desc << "Table '" << table << "' extreme mutation rate "
                      << current_rate << "/s (no baseline yet, absolute threshold)";
                 report.description = desc.str();
                 reports.push_back(report);
             }
+            // Skip Z-score analysis for tables without established baseline
             continue;
         }
 
+        // =================================================================
+        // Z-SCORE ANALYSIS: Only for tables with established baseline
+        // =================================================================
         double z = ComputeZScore(current_rate, historical);
         AnomalySeverity severity = Classify(z);
 
@@ -153,10 +171,15 @@ double AnomalyDetector::ComputeZScore(
     // Avoid division by zero when stddev is near zero.
     // When both mean and stddev are tiny, the system is in a quiet/idle state.
     // Only flag as anomalous if the current rate is meaningfully high in
-    // absolute terms (>= 1.0 mutations/sec), not just relatively different.
-    if (stddev < 0.001) {
-        if (current_value - mean < 1.0) return 0.0; // Not a meaningful spike
-        return ZSCORE_HIGH_THRESHOLD + 1.0;
+    // absolute terms, not just relatively different from a near-zero baseline.
+    if (stddev < 0.01) {
+        // With near-zero variance, Z-score is meaningless
+        // Require absolute rate > 5/sec AND at least 10x the mean to flag
+        if (current_value < 5.0 || (mean > 0.001 && current_value < mean * 10)) {
+            return 0.0; // Not a meaningful spike
+        }
+        // Return a moderate Z-score, not automatic HIGH severity
+        return ZSCORE_MEDIUM_THRESHOLD + 0.5;
     }
 
     return (current_value - mean) / stddev;

@@ -344,6 +344,250 @@ app.get('/api/ai/stats', requireAuth, async (req, res) => {
 });
 
 // ────────────────────────────────────────────
+// TESTING ROUTES
+// ────────────────────────────────────────────
+
+/**
+ * Bulk data insert endpoint for testing
+ * Supports time manipulation and optional index creation
+ */
+app.post('/api/test/bulk-insert', requireAuth, async (req, res) => {
+  try {
+    const {
+      tableName = 'test_bulk_data',
+      rowCount = 10000,
+      withIndex = true,
+      indexColumn = 'value',
+      useTimeManipulation = false,
+      startTimestamp = Date.now(),
+      timeIncrementMs = 1000,
+      batchSize = 1000,
+    } = req.body;
+
+    const client = await getClient(req);
+    const results: any[] = [];
+    const startTime = Date.now();
+
+    // Drop existing table
+    await client.query(`DROP TABLE IF EXISTS ${tableName}`);
+    results.push({ step: 'drop_table', success: true });
+
+    // Create table
+    const createResult = await client.query(`
+      CREATE TABLE ${tableName} (
+        id INTEGER PRIMARY KEY AUTO_INCREMENT,
+        value INTEGER NOT NULL,
+        data VARCHAR(255),
+        created_at TIMESTAMP
+      )
+    `);
+    results.push({ step: 'create_table', success: !createResult.error, error: createResult.error });
+
+    if (createResult.error) {
+      res.status(500).json({ success: false, error: createResult.error, results });
+      return;
+    }
+
+    // Create index if requested
+    if (withIndex) {
+      const indexResult = await client.query(
+        `CREATE INDEX idx_${tableName}_${indexColumn} ON ${tableName}(${indexColumn})`
+      );
+      results.push({ step: 'create_index', success: !indexResult.error, error: indexResult.error });
+    }
+
+    // Insert data in batches
+    let insertedRows = 0;
+    const batches = Math.ceil(rowCount / batchSize);
+
+    for (let batch = 0; batch < batches; batch++) {
+      const batchStart = batch * batchSize;
+      const batchEnd = Math.min(batchStart + batchSize, rowCount);
+      const values: string[] = [];
+
+      for (let i = batchStart; i < batchEnd; i++) {
+        const value = Math.floor(Math.random() * 1000000);
+        const data = `test_data_${i}_${Math.random().toString(36).substring(7)}`;
+
+        if (useTimeManipulation) {
+          const timestamp = startTimestamp + (i * timeIncrementMs);
+          const tsStr = new Date(timestamp).toISOString().replace('T', ' ').substring(0, 19);
+          values.push(`(${value}, '${data}', '${tsStr}')`);
+        } else {
+          values.push(`(${value}, '${data}', CURRENT_TIMESTAMP)`);
+        }
+      }
+
+      const insertSql = `INSERT INTO ${tableName} (value, data, created_at) VALUES ${values.join(', ')}`;
+      const insertResult = await client.query(insertSql);
+
+      if (insertResult.error) {
+        results.push({ step: `batch_${batch}`, success: false, error: insertResult.error });
+      } else {
+        insertedRows += (batchEnd - batchStart);
+      }
+    }
+
+    // Verify count
+    const countResult = await client.query(`SELECT COUNT(*) FROM ${tableName}`);
+    const actualCount = countResult.data?.rows?.[0]?.[0] || '0';
+
+    const duration = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      tableName,
+      requestedRows: rowCount,
+      insertedRows,
+      actualCount: parseInt(actualCount),
+      withIndex,
+      useTimeManipulation,
+      durationMs: duration,
+      rowsPerSecond: (insertedRows / (duration / 1000)).toFixed(2),
+      results,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Run performance comparison test
+ * Compares index scan vs sequential scan
+ */
+app.post('/api/test/performance-compare', requireAuth, async (req, res) => {
+  try {
+    const { rowCount = 10000, queryCount = 50 } = req.body;
+    const client = await getClient(req);
+    const results: any[] = [];
+
+    // Create test tables
+    await client.query('DROP TABLE IF EXISTS perf_with_index');
+    await client.query('DROP TABLE IF EXISTS perf_no_index');
+
+    await client.query(`
+      CREATE TABLE perf_with_index (
+        id INTEGER PRIMARY KEY,
+        value INTEGER,
+        data VARCHAR(100)
+      )
+    `);
+    await client.query(`
+      CREATE TABLE perf_no_index (
+        id INTEGER PRIMARY KEY,
+        value INTEGER,
+        data VARCHAR(100)
+      )
+    `);
+    await client.query('CREATE INDEX idx_perf_value ON perf_with_index(value)');
+
+    // Insert data
+    const batchSize = 1000;
+    const batches = Math.ceil(rowCount / batchSize);
+
+    for (let batch = 0; batch < batches; batch++) {
+      const values: string[] = [];
+      for (let i = 0; i < batchSize && (batch * batchSize + i) < rowCount; i++) {
+        const id = batch * batchSize + i;
+        const value = Math.floor(Math.random() * 1000);
+        values.push(`(${id}, ${value}, 'data_${id}')`);
+      }
+      await client.query(`INSERT INTO perf_with_index (id, value, data) VALUES ${values.join(', ')}`);
+      await client.query(`INSERT INTO perf_no_index (id, value, data) VALUES ${values.join(', ')}`);
+    }
+
+    // Test index scan
+    const indexStart = Date.now();
+    for (let i = 0; i < queryCount; i++) {
+      await client.query(`SELECT * FROM perf_with_index WHERE value = ${Math.floor(Math.random() * 1000)}`);
+    }
+    const indexDuration = Date.now() - indexStart;
+
+    results.push({
+      test: 'index_scan',
+      totalDurationMs: indexDuration,
+      queryCount,
+      avgQueryMs: (indexDuration / queryCount).toFixed(2),
+    });
+
+    // Test sequential scan
+    const seqStart = Date.now();
+    for (let i = 0; i < queryCount; i++) {
+      await client.query(`SELECT * FROM perf_no_index WHERE value = ${Math.floor(Math.random() * 1000)}`);
+    }
+    const seqDuration = Date.now() - seqStart;
+
+    results.push({
+      test: 'sequential_scan',
+      totalDurationMs: seqDuration,
+      queryCount,
+      avgQueryMs: (seqDuration / queryCount).toFixed(2),
+    });
+
+    // Cleanup
+    await client.query('DROP TABLE IF EXISTS perf_with_index');
+    await client.query('DROP TABLE IF EXISTS perf_no_index');
+
+    const improvement = ((seqDuration - indexDuration) / seqDuration * 100);
+
+    res.json({
+      success: true,
+      rowCount,
+      queryCount,
+      indexScanMs: indexDuration,
+      sequentialScanMs: seqDuration,
+      improvementPercent: improvement.toFixed(2),
+      results,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * AI system health check endpoint
+ */
+app.get('/api/test/ai-health', requireAuth, async (req, res) => {
+  try {
+    const client = await getClient(req);
+    const checks: any[] = [];
+
+    // Check AI status
+    const aiStatus = await client.query('SHOW AI STATUS');
+    checks.push({
+      name: 'AI Layer Status',
+      success: aiStatus.data !== undefined,
+      data: aiStatus.data,
+    });
+
+    // Check execution stats
+    const execStats = await client.query('SHOW EXECUTION STATS');
+    checks.push({
+      name: 'Execution Stats',
+      success: execStats.data !== undefined,
+      data: execStats.data,
+    });
+
+    // Check anomalies
+    const anomalies = await client.query('SHOW ANOMALIES');
+    checks.push({
+      name: 'Anomaly Detection',
+      success: anomalies.data !== undefined,
+      data: anomalies.data,
+    });
+
+    const allPassed = checks.every(c => c.success);
+
+    res.json({
+      success: allPassed,
+      healthChecks: checks,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────
 // SPA FALLBACK
 // ────────────────────────────────────────────
 app.get('*', (req, res) => {

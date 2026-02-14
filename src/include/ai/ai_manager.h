@@ -57,6 +57,9 @@ public:
     bool SaveState() const;
     bool LoadState();
 
+    // Periodic maintenance - decay/relearn for adaptation
+    void PeriodicMaintenance();
+
 private:
     AIManager() = default;
     ~AIManager();
@@ -70,6 +73,7 @@ private:
     std::unique_ptr<TemporalIndexManager> temporal_index_mgr_;
 
     std::atomic<bool> initialized_{false};
+    uint64_t maintenance_task_id_{0};  // Periodic relearning task
 
     // Non-owning references to engine dependencies
     Catalog* catalog_{nullptr};

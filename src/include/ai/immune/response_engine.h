@@ -1,9 +1,10 @@
 #pragma once
-
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -38,6 +39,9 @@ public:
     bool IsTableBlocked(const std::string& table_name) const;
     bool IsUserBlocked(const std::string& user) const;
 
+    // Check if a table is in cooldown (recently recovered)
+    bool IsInCooldown(const std::string& table_name) const;
+
     // Admin: unblock
     void UnblockTable(const std::string& table_name);
     void UnblockUser(const std::string& user);
@@ -59,6 +63,14 @@ private:
     mutable std::shared_mutex blocked_mutex_;
     std::unordered_set<std::string> blocked_tables_;
     std::unordered_set<std::string> blocked_users_;
+
+    // Cooldown: tables that were recently recovered (prevent re-triggering)
+    // Maps table_name -> cooldown_end_time
+    mutable std::shared_mutex cooldown_mutex_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> recovery_cooldown_;
+
+    // Cooldown duration: 60 seconds after recovery before re-analyzing
+    static constexpr auto RECOVERY_COOLDOWN = std::chrono::seconds(60);
 };
 
 } // namespace ai

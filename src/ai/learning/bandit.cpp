@@ -14,21 +14,24 @@ ScanStrategy UCB1Bandit::SelectStrategy(const QueryFeatures& features,
                                          const std::string& table_name) const {
     uint64_t total = total_pulls_.load(std::memory_order_relaxed);
 
-    // Exploration phase: not enough data yet
-    if (total < MIN_SAMPLES_BEFORE_LEARNING) {
-        return ScanStrategy::SEQUENTIAL_SCAN; // Default behavior
+    // If no index is available, sequential scan is the ONLY option
+    // Don't even try to learn - just return sequential scan immediately
+    if (features.has_index_available < 0.5) {
+        return ScanStrategy::SEQUENTIAL_SCAN;
     }
 
-    // Force exploration of under-sampled arms
+    // Exploration phase: not enough data yet for this scenario (with index)
+    if (total < MIN_SAMPLES_BEFORE_LEARNING) {
+        // During exploration, alternate between strategies to gather data
+        // But only when index IS available
+        return (total % 2 == 0) ? ScanStrategy::INDEX_SCAN : ScanStrategy::SEQUENTIAL_SCAN;
+    }
+
+    // Force exploration of under-sampled arms (only when index is available)
     for (size_t i = 0; i < NUM_ARMS; ++i) {
         if (arms_[i].pull_count.load(std::memory_order_relaxed) < MIN_ARM_PULLS) {
             return static_cast<ScanStrategy>(i);
         }
-    }
-
-    // If no index available, always use sequential scan
-    if (features.has_index_available < 0.5) {
-        return ScanStrategy::SEQUENTIAL_SCAN;
     }
 
     // Try table-specific scores first (if sufficient data)
@@ -54,6 +57,25 @@ ScanStrategy UCB1Bandit::SelectStrategy(const QueryFeatures& features,
         if (score > best_score) {
             best_score = score;
             best_arm = i;
+        }
+    }
+
+    // Additional context-aware adjustments:
+    // - High selectivity (few rows match) -> prefer index scan
+    // - Low selectivity (many rows match) -> prefer sequential scan
+    if (features.selectivity_estimate < 0.05 && best_arm == 0) {
+        // Very selective query (< 5% of rows), consider switching to index
+        double idx_reward = GetAverageReward(1);
+        double seq_reward = GetAverageReward(0);
+        if (idx_reward > 0 && idx_reward > seq_reward * 0.8) {
+            best_arm = 1; // Index scan
+        }
+    } else if (features.selectivity_estimate > 0.5 && best_arm == 1) {
+        // Low selectivity (> 50% of rows), consider switching to sequential
+        double idx_reward = GetAverageReward(1);
+        double seq_reward = GetAverageReward(0);
+        if (seq_reward > 0 && seq_reward > idx_reward * 0.8) {
+            best_arm = 0; // Sequential scan
         }
     }
 
@@ -112,6 +134,51 @@ void UCB1Bandit::Reset() {
         arm.table_stats.clear();
     }
     total_pulls_.store(0, std::memory_order_relaxed);
+}
+
+void UCB1Bandit::Decay(double decay_factor) {
+    // Decay all arm statistics to make recent data more influential
+    // This allows the AI to adapt to changing workloads
+
+    if (decay_factor <= 0.0) {
+        Reset();
+        return;
+    }
+    if (decay_factor >= 1.0) {
+        return; // No decay
+    }
+
+    uint64_t new_total = 0;
+    for (auto& arm : arms_) {
+        // Decay pull count
+        uint64_t old_pulls = arm.pull_count.load(std::memory_order_relaxed);
+        uint64_t new_pulls = static_cast<uint64_t>(old_pulls * decay_factor);
+        arm.pull_count.store(new_pulls, std::memory_order_relaxed);
+        new_total += new_pulls;
+
+        // Decay total reward (keep average the same by decaying proportionally)
+        uint64_t old_reward = arm.total_reward_x10000.load(std::memory_order_relaxed);
+        uint64_t new_reward = static_cast<uint64_t>(old_reward * decay_factor);
+        arm.total_reward_x10000.store(new_reward, std::memory_order_relaxed);
+
+        // Decay per-table stats
+        {
+            std::lock_guard lock(arm.table_mutex);
+            for (auto& [table_name, stats] : arm.table_stats) {
+                stats.pulls = static_cast<uint64_t>(stats.pulls * decay_factor);
+                stats.total_reward *= decay_factor;
+            }
+            // Remove tables with too few pulls after decay
+            for (auto it = arm.table_stats.begin(); it != arm.table_stats.end(); ) {
+                if (it->second.pulls < 2) {
+                    it = arm.table_stats.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
+    total_pulls_.store(new_total, std::memory_order_relaxed);
 }
 
 double UCB1Bandit::ComputeUCBScore(size_t arm_index) const {

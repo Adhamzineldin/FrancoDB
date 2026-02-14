@@ -69,6 +69,7 @@ namespace chronosdb {
     public:
         StatementType GetType() const override { return StatementType::DROP; }
         std::string table_name_;
+        bool if_exists_ = false;  // DROP TABLE IF EXISTS
     };
 
     // --- ROW LEVEL OPS ---

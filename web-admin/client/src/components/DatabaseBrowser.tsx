@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { ChronosResult } from '../types';
+import SchemaBuilder from './SchemaBuilder';
 
 interface DatabaseBrowserProps {
   currentDb: string;
@@ -15,6 +16,7 @@ export default function DatabaseBrowser({ currentDb, onUseDatabase, onViewTable 
   const [error, setError] = useState('');
   const [newDbName, setNewDbName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [showSchemaBuilder, setShowSchemaBuilder] = useState(false);
 
   const loadDatabases = useCallback(async () => {
     try {
@@ -155,6 +157,9 @@ export default function DatabaseBrowser({ currentDb, onUseDatabase, onViewTable 
         <div className="panel">
           <div className="panel-header">
             <h3>Tables in "{currentDb}"</h3>
+            <button className="btn-sm btn-primary" onClick={() => setShowSchemaBuilder(true)}>
+              + Create Table
+            </button>
           </div>
           <div className="panel-body">
             <div className="table-list">
@@ -171,6 +176,15 @@ export default function DatabaseBrowser({ currentDb, onUseDatabase, onViewTable 
             </div>
           </div>
         </div>
+      )}
+
+      {/* Schema Builder Modal */}
+      {showSchemaBuilder && (
+        <SchemaBuilder
+          currentDb={currentDb}
+          onTableCreated={loadTables}
+          onClose={() => setShowSchemaBuilder(false)}
+        />
       )}
     </div>
   );

@@ -36,6 +36,24 @@ static constexpr size_t QUERY_FEATURE_DIMENSIONS = 8;
 static constexpr double REWARD_SCALE_MS = 100.0;
 
 // ========================================================================
+// AI RELEARNING / DECAY (Adaptation to changing workloads)
+// ========================================================================
+
+// Decay factor applied to historical data (0.0 = full reset, 1.0 = no decay)
+// Applied periodically to make recent data more influential
+static constexpr double AI_DECAY_FACTOR = 0.8;
+
+// Interval for periodic decay/relearning (milliseconds) = 10 minutes
+static constexpr uint32_t AI_DECAY_INTERVAL_MS = 10 * 60 * 1000;
+
+// Interval for full reset if workload changes dramatically (milliseconds) = 1 hour
+static constexpr uint32_t AI_FULL_RESET_INTERVAL_MS = 60 * 60 * 1000;
+
+// Threshold for detecting workload change (ratio of current to historical performance)
+// If performance differs by more than this factor, trigger faster relearning
+static constexpr double WORKLOAD_CHANGE_THRESHOLD = 2.0;
+
+// ========================================================================
 // IMMUNE SYSTEM (Anomaly Detection)
 // ========================================================================
 

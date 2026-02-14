@@ -52,6 +52,10 @@ public:
     std::vector<std::string> GetMonitoredTables() const;
     size_t GetTotalAnomalies() const;
 
+    // Decay/Relearning - adapt to changing workloads
+    void Decay(double decay_factor);
+    void PeriodicMaintenance();  // Called by AIScheduler
+
     // Lifecycle
     void Start();
     void Stop();

@@ -92,6 +92,9 @@ public:
 
     void Reset();
 
+    // Decay historical data for adaptation to changing workloads
+    void Decay(double decay_factor);
+
 private:
     Catalog* catalog_;
 

@@ -3,6 +3,7 @@
 #include "ai/immune/user_profiler.h"
 #include "ai/immune/anomaly_detector.h"
 #include "ai/immune/response_engine.h"
+#include "ai/ai_config.h"
 #include "ai/metrics_store.h"
 #include "common/logger.h"
 
@@ -103,6 +104,11 @@ void ImmuneSystem::OnAfterDML(const DMLEvent& event) {
     if (event.operation != DMLOperation::SELECT &&
         event.rows_affected >= MASS_OPERATION_ROW_THRESHOLD) {
 
+        // Check if this table is in cooldown (recently handled)
+        if (response_engine_->IsInCooldown(event.table_name)) {
+            return; // Skip - already handled recently
+        }
+
         AnomalySeverity severity;
         if (event.rows_affected >= MASS_OPERATION_ROW_THRESHOLD * 10) {
             severity = AnomalySeverity::HIGH;   // 500+ rows = auto-recover
@@ -154,6 +160,10 @@ void ImmuneSystem::PeriodicAnalysis() {
     auto reports = anomaly_detector_->Analyze(*mutation_monitor_,
                                                *user_profiler_);
     for (const auto& report : reports) {
+        // Skip tables that are in cooldown (recently recovered)
+        if (response_engine_->IsInCooldown(report.table_name)) {
+            continue;
+        }
         anomaly_detector_->RecordAnomaly(report);
         response_engine_->Respond(report);
     }
@@ -192,6 +202,27 @@ std::vector<std::string> ImmuneSystem::GetMonitoredTables() const {
 
 size_t ImmuneSystem::GetTotalAnomalies() const {
     return anomaly_detector_->GetTotalAnomalies();
+}
+
+void ImmuneSystem::Decay(double decay_factor) {
+    if (!active_.load()) return;
+
+    LOG_INFO("ImmuneSystem", "Applying decay factor " +
+             std::to_string(decay_factor) + " to adapt to workload changes");
+
+    // Decay mutation monitor history
+    mutation_monitor_->Decay(decay_factor);
+
+    // User profiler would also be decayed here if it tracked historical data
+}
+
+void ImmuneSystem::PeriodicMaintenance() {
+    if (!active_.load()) return;
+
+    // Apply periodic decay to allow adaptation to changing workloads
+    Decay(AI_DECAY_FACTOR);
+
+    LOG_INFO("ImmuneSystem", "Periodic maintenance complete. " + GetSummary());
 }
 
 void ImmuneSystem::Start() {

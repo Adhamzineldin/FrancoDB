@@ -52,7 +52,12 @@ public:
     // Has enough data to start recommending?
     bool HasSufficientData() const;
 
+    // Reset all learned data
     void Reset();
+
+    // Decay historical data to adapt to changing workloads
+    // decay_factor: 0.0 = full reset, 1.0 = no change
+    void Decay(double decay_factor);
 
     // State persistence
     bool SaveState(const std::string& path) const;

@@ -239,6 +239,61 @@ void QueryPlanOptimizer::Reset() {
     early_terminations_.store(0, std::memory_order_relaxed);
 }
 
+void QueryPlanOptimizer::Decay(double decay_factor) {
+    if (decay_factor <= 0.0) {
+        Reset();
+        return;
+    }
+    if (decay_factor >= 1.0) {
+        return; // No decay
+    }
+
+    // Decay filter arms
+    uint64_t new_filter_total = 0;
+    for (auto& arm : filter_arms_) {
+        uint64_t old_pulls = arm.pull_count.load(std::memory_order_relaxed);
+        uint64_t new_pulls = static_cast<uint64_t>(old_pulls * decay_factor);
+        arm.pull_count.store(new_pulls, std::memory_order_relaxed);
+        new_filter_total += new_pulls;
+
+        uint64_t old_reward = arm.total_reward_x10000.load(std::memory_order_relaxed);
+        uint64_t new_reward = static_cast<uint64_t>(old_reward * decay_factor);
+        arm.total_reward_x10000.store(new_reward, std::memory_order_relaxed);
+    }
+    filter_total_pulls_.store(new_filter_total, std::memory_order_relaxed);
+
+    // Decay limit arms
+    uint64_t new_limit_total = 0;
+    for (auto& arm : limit_arms_) {
+        uint64_t old_pulls = arm.pull_count.load(std::memory_order_relaxed);
+        uint64_t new_pulls = static_cast<uint64_t>(old_pulls * decay_factor);
+        arm.pull_count.store(new_pulls, std::memory_order_relaxed);
+        new_limit_total += new_pulls;
+
+        uint64_t old_reward = arm.total_reward_x10000.load(std::memory_order_relaxed);
+        uint64_t new_reward = static_cast<uint64_t>(old_reward * decay_factor);
+        arm.total_reward_x10000.store(new_reward, std::memory_order_relaxed);
+    }
+    limit_total_pulls_.store(new_limit_total, std::memory_order_relaxed);
+
+    // Decay selectivity model
+    {
+        std::lock_guard lock(selectivity_mutex_);
+        for (auto it = selectivity_model_.begin(); it != selectivity_model_.end(); ) {
+            it->second.observations = static_cast<uint64_t>(it->second.observations * decay_factor);
+            it->second.cumulative_selectivity *= decay_factor;
+            // Remove entries with too few observations
+            if (it->second.observations < 2) {
+                it = selectivity_model_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Don't decay counters - they're just for stats display
+}
+
 bool QueryPlanOptimizer::SaveState(const std::string& path) const {
     std::ofstream file(path);
     if (!file.is_open()) return false;

@@ -71,6 +71,24 @@ namespace chronosdb {
             }
             return ParseDelete();
         }
+        // 5b. DROP (English keyword for DROP TABLE)
+        else if (current_token_.type == TokenType::DROP) {
+            Advance(); // Eat 'DROP'
+
+            if (current_token_.type == TokenType::TABLE) {
+                Advance(); // Eat 'TABLE'
+                return ParseDropTable();
+            }
+            if (current_token_.type == TokenType::DATABASE) {
+                Advance(); // Eat 'DATABASE'
+                return ParseDropDatabase();
+            }
+            if (current_token_.type == TokenType::INDEX) {
+                Advance(); // Eat 'INDEX'
+                return ParseDropIndex();
+            }
+            throw Exception(ExceptionType::PARSER, "Expected TABLE, DATABASE, or INDEX after DROP");
+        }
         // 6. BEGIN TRANSACTION
         else if (current_token_.type == TokenType::BEGIN_TXN) {
             Advance(); // Eat '2EBDA2'
@@ -348,6 +366,8 @@ namespace chronosdb {
                 // Parse multiple constraints
                 while (true) {
                     if (Match(TokenType::PRIMARY_KEY)) {
+                        // Optionally consume KEY if present (PRIMARY KEY vs PRIMARY)
+                        Match(TokenType::KEY);
                         is_primary_key = true;
                         is_nullable = false; // PK implies NOT NULL
                     } else if (Match(TokenType::NOT)) {
@@ -1121,6 +1141,62 @@ namespace chronosdb {
 
         if (!Match(TokenType::SEMICOLON)) {
             throw Exception(ExceptionType::PARSER, "Expected ; after DROP DATABASE");
+        }
+
+        return stmt;
+    }
+
+    std::unique_ptr<DropStatement> Parser::ParseDropTable() {
+        auto stmt = std::make_unique<DropStatement>();
+
+        // Handle IF EXISTS
+        if (current_token_.type == TokenType::IF) {
+            Advance(); // Eat IF
+            if (current_token_.type == TokenType::EXISTS) {
+                Advance(); // Eat EXISTS
+                stmt->if_exists_ = true;
+            } else {
+                throw Exception(ExceptionType::PARSER, "Expected EXISTS after IF");
+            }
+        }
+
+        if (current_token_.type != TokenType::IDENTIFIER) {
+            throw Exception(ExceptionType::PARSER, "Expected table name after DROP TABLE");
+        }
+
+        stmt->table_name_ = current_token_.text;
+        Advance();
+
+        if (!Match(TokenType::SEMICOLON)) {
+            throw Exception(ExceptionType::PARSER, "Expected ; after DROP TABLE");
+        }
+
+        return stmt;
+    }
+
+    std::unique_ptr<DropIndexStatement> Parser::ParseDropIndex() {
+        auto stmt = std::make_unique<DropIndexStatement>();
+
+        // Handle IF EXISTS
+        if (current_token_.type == TokenType::IF) {
+            Advance(); // Eat IF
+            if (current_token_.type == TokenType::EXISTS) {
+                Advance(); // Eat EXISTS
+                // DropIndexStatement doesn't have if_exists_ but we tolerate it
+            } else {
+                throw Exception(ExceptionType::PARSER, "Expected EXISTS after IF");
+            }
+        }
+
+        if (current_token_.type != TokenType::IDENTIFIER) {
+            throw Exception(ExceptionType::PARSER, "Expected index name after DROP INDEX");
+        }
+
+        stmt->index_name_ = current_token_.text;
+        Advance();
+
+        if (!Match(TokenType::SEMICOLON)) {
+            throw Exception(ExceptionType::PARSER, "Expected ; after DROP INDEX");
         }
 
         return stmt;

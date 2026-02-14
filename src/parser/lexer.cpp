@@ -38,8 +38,8 @@ namespace chronosdb {
         {"UPDATE",  TokenType::UPDATE_CMD}, // English
         {"3ADEL",   TokenType::UPDATE_CMD}, // Franco: "3adel" = modify
         
-        // SET
-        {"SET",     TokenType::SET},        // English
+        // SET (for UPDATE ... SET)
+        {"SET",     TokenType::UPDATE_SET}, // English
         {"5ALY",    TokenType::UPDATE_SET}, // Franco: "5aly" = make it
         
         // DELETE
@@ -232,6 +232,15 @@ namespace chronosdb {
         
         {"OF",         TokenType::OF},
         
+        // =====================================================================
+        // CONDITIONAL (IF EXISTS)
+        // =====================================================================
+        {"IF",         TokenType::IF},
+        {"LAW",        TokenType::IF},          // Franco: "law" = if
+
+        {"EXISTS",     TokenType::EXISTS},
+        {"MAWGOOD",    TokenType::EXISTS},      // Franco: "mawgood" = exists
+
         // =====================================================================
         // GROUP BY & AGGREGATES
         // =====================================================================

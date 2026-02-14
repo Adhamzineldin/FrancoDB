@@ -1,4 +1,4 @@
-/**
+B/**
  * ddl_executor.cpp
  * 
  * Production-Grade Implementation of Data Definition Language Operations
@@ -149,6 +149,10 @@ ExecutionResult DDLExecutor::DropTable(DropStatement* stmt) {
     // Check if table exists
     TableMetadata* table_info = catalog_->GetTable(stmt->table_name_);
     if (!table_info) {
+        // If IF EXISTS was specified, silently succeed
+        if (stmt->if_exists_) {
+            return ExecutionResult::Message("DROP TABLE SUCCESS (table did not exist)");
+        }
         return ExecutionResult::Error("[DDL] Table does not exist: " + stmt->table_name_);
     }
     

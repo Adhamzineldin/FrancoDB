@@ -15,6 +15,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'databases', label: 'Databases', icon: '⛁' },
   { id: 'tables', label: 'Tables', icon: '☰' },
   { id: 'query', label: 'SQL Editor', icon: '⟩_' },
+  { id: 'testing', label: 'Testing', icon: '🧪' },
   { id: 'users', label: 'Users', icon: '⊕' },
   { id: 'ai-status', label: 'AI Layer', icon: '⚡' },
 ];

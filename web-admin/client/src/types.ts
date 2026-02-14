@@ -109,4 +109,5 @@ export type Page =
   | 'tables'
   | 'query'
   | 'users'
-  | 'ai-status';
+  | 'ai-status'
+  | 'testing';

@@ -76,6 +76,10 @@ public:
     std::vector<UCB1Bandit::ArmStats> GetArmStats() const;
     uint64_t GetTotalQueriesObserved() const;
 
+    // Decay/Relearning - adapt to changing workloads
+    void Decay(double decay_factor);
+    void PeriodicMaintenance();  // Called by AIScheduler
+
     // State persistence
     bool SaveState(const std::string& dir) const;
     bool LoadState(const std::string& dir);

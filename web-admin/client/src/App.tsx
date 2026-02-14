@@ -9,6 +9,7 @@ import TableViewer from './components/TableViewer';
 import SQLEditor from './components/SQLEditor';
 import UserManagement from './components/UserManagement';
 import AIStatus from './components/AIStatus';
+import TestingPage from './components/TestingPage';
 
 export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -99,6 +100,9 @@ export default function App() {
       break;
     case 'ai-status':
       content = <AIStatus />;
+      break;
+    case 'testing':
+      content = <TestingPage currentDb={currentDb} />;
       break;
     default:
       content = <Dashboard onNavigate={setPage} />;

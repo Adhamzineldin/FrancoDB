@@ -44,6 +44,12 @@ public:
     // All tables being monitored
     std::vector<std::string> GetMonitoredTables() const;
 
+    // Clear mutation history for a table (called after recovery)
+    void ClearTableHistory(const std::string& table_name);
+
+    // Decay all historical data to adapt to changing workloads
+    void Decay(double decay_factor);
+
 private:
     struct MutationEntry {
         uint64_t timestamp_us;

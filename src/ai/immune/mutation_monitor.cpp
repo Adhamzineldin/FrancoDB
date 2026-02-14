@@ -85,6 +85,41 @@ std::vector<std::string> MutationMonitor::GetMonitoredTables() const {
     return result;
 }
 
+void MutationMonitor::ClearTableHistory(const std::string& table_name) {
+    std::unique_lock lock(tables_mutex_);
+    auto it = tables_.find(table_name);
+    if (it != tables_.end()) {
+        std::lock_guard entry_lock(it->second->mutex);
+        it->second->entries.clear();
+    }
+}
+
+void MutationMonitor::Decay(double decay_factor) {
+    if (decay_factor <= 0.0) {
+        // Full reset
+        std::unique_lock lock(tables_mutex_);
+        tables_.clear();
+        return;
+    }
+    if (decay_factor >= 1.0) {
+        return; // No decay
+    }
+
+    // Decay row counts in historical entries to reduce their influence
+    // This makes recent mutations more significant than old ones
+    std::shared_lock lock(tables_mutex_);
+    for (auto& [table_name, log_ptr] : tables_) {
+        std::lock_guard entry_lock(log_ptr->mutex);
+        for (auto& entry : log_ptr->entries) {
+            entry.row_count = static_cast<uint32_t>(entry.row_count * decay_factor);
+        }
+        // Remove entries that have decayed to near-zero
+        while (!log_ptr->entries.empty() && log_ptr->entries.front().row_count < 1) {
+            log_ptr->entries.pop_front();
+        }
+    }
+}
+
 MutationMonitor::TableMutationLog& MutationMonitor::GetOrCreate(
     const std::string& table_name) {
     // Fast path: read lock

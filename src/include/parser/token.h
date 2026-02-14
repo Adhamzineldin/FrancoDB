@@ -102,6 +102,10 @@ namespace chronosdb {
         CHECK,       //فحص / CHECK
         AUTO_INCREMENT, // TAZAYED / AUTO_INCREMENT
 
+        // --- CONDITIONAL ---
+        IF,          // IF / LAW
+        EXISTS,      // EXISTS / MAWGOOD
+
         // --- LITERALS ---
         DECIMAL_LITERAL,
         TRUE_LIT,    // AH
