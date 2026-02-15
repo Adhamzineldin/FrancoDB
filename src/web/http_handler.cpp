@@ -920,6 +920,13 @@ HttpResponse HttpHandler::HandleGetAIDetailed(const HttpRequest& req) {
         }
         json << "\n    ]";
         json << ",\n    \"summary\": \"" << JsonEscape(immune->GetSummary()) << "\"";
+
+        // Threat Detection stats (SQL injection & XSS)
+        json << ",\n    \"threat_detection\": {"
+             << "\n      \"total_threats\": " << immune->GetTotalThreats()
+             << ",\n      \"sql_injection_count\": " << immune->GetSQLInjectionCount()
+             << ",\n      \"xss_count\": " << immune->GetXSSCount()
+             << "\n    }";
     }
     json << "\n  }";
 

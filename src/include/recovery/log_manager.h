@@ -213,12 +213,27 @@ namespace chronosdb {
         std::string GetLogFileName() const;
 
         /**
-         * Get log file path for a specific database
-         * 
+         * Get log file path for a specific database (main WAL)
+         *
          * @param db_name Database name
          * @return Full path to the WAL file
          */
         std::string GetLogFilePath(const std::string& db_name) const;
+
+        /**
+         * Get per-table log file path for fast time travel
+         * Each table has its own WAL file: data/<db>/wal/<table>.wal
+         *
+         * @param db_name Database name
+         * @param table_name Table name
+         * @return Full path to the per-table WAL file
+         */
+        std::string GetTableLogFilePath(const std::string& db_name, const std::string& table_name) const;
+
+        /**
+         * Check if a per-table WAL file exists for fast time travel
+         */
+        bool HasTableLog(const std::string& db_name, const std::string& table_name) const;
 
         /**
          * Get current database context
@@ -283,6 +298,13 @@ namespace chronosdb {
         void CloseCurrentLog();
 
         /**
+         * Write serialized record to per-table WAL file (dual-write for fast time travel)
+         * Called under latch_ for DML records with a table_name
+         */
+        void WriteToTableLog(const std::string& db_name, const std::string& table_name,
+                            const std::vector<char>& record_buf);
+
+        /**
          * Write helpers for serialization
          */
         static void WriteString(std::vector<char>& buffer, const std::string& str);
@@ -321,6 +343,10 @@ namespace chronosdb {
 
         // Log Stream Map (optional: for keeping multiple streams open)
         std::unordered_map<std::string, std::unique_ptr<LogStream>> log_streams_;
+
+        // Per-Table WAL Files (dual-write for fast time travel)
+        // Key: "db_name/table_name", Value: open ofstream for per-table WAL
+        std::unordered_map<std::string, std::ofstream> table_log_files_;
 
         // Transaction Tracking (for ARIES Undo Chain)
         std::unordered_map<LogRecord::txn_id_t, TransactionLogEntry> active_transactions_;

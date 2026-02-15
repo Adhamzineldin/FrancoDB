@@ -3,6 +3,8 @@
 #include "ai/immune/user_profiler.h"
 #include "ai/immune/anomaly_detector.h"
 #include "ai/immune/response_engine.h"
+#include "ai/immune/threat_detector.h"
+#include "ai/dml_observer.h"
 #include "ai/ai_config.h"
 #include "ai/metrics_store.h"
 #include "common/logger.h"
@@ -35,7 +37,8 @@ ImmuneSystem::ImmuneSystem(LogManager* log_manager, Catalog* catalog,
       user_profiler_(std::make_unique<UserBehaviorProfiler>()),
       anomaly_detector_(std::make_unique<AnomalyDetector>()),
       response_engine_(std::make_unique<ResponseEngine>(
-          log_manager, catalog, bpm, checkpoint_mgr)) {}
+          log_manager, catalog, bpm, checkpoint_mgr)),
+      threat_detector_(std::make_unique<ThreatDetector>()) {}
 
 ImmuneSystem::~ImmuneSystem() {
     Stop();
@@ -44,20 +47,58 @@ ImmuneSystem::~ImmuneSystem() {
 bool ImmuneSystem::OnBeforeDML(const DMLEvent& event) {
     if (!active_.load()) return true;
 
-    // Only check mutations (INSERT/UPDATE/DELETE), not SELECT
-    if (event.operation == DMLOperation::SELECT) return true;
-
     // Never block system tables - they are managed by the engine
     if (IsSystemTable(event.table_name)) return true;
 
+    // ================================================================
+    // THREAT DETECTION: Analyze query content for SQL injection & XSS
+    // Runs on ALL operations (including SELECT) before any other checks
+    // ================================================================
+    if (!event.query_text.empty()) {
+        auto threat = threat_detector_->Analyze(event.query_text);
+        if (threat.type != ThreatType::NONE) {
+            auto report = ThreatDetector::ToAnomalyReport(
+                threat, event.table_name, event.user);
+            anomaly_detector_->RecordAnomaly(report);
+
+            if (threat.severity >= AnomalySeverity::MEDIUM) {
+                // Build descriptive block reason with attack type and severity
+                std::string severity_label = (threat.severity == AnomalySeverity::HIGH)
+                    ? "CRITICAL" : "WARNING";
+                std::string attack_type = ThreatDetector::ThreatTypeToString(threat.type);
+                std::string reason = "[IMMUNE:" + attack_type + ":" + severity_label + "] "
+                    + threat.description;
+                DMLObserverRegistry::SetBlockReason(reason);
+
+                LOG_WARN("ImmuneSystem",
+                         report.description + " [BLOCKED]");
+                response_engine_->Respond(report);
+                return false;
+            }
+
+            // LOW severity: suspicious, log warning but allow
+            LOG_WARN("ImmuneSystem",
+                     report.description + " [SUSPICIOUS]");
+        }
+    }
+
+    // SELECT operations don't need mutation-rate checks
+    if (event.operation == DMLOperation::SELECT) return true;
+
     // Check if table is blocked
     if (response_engine_->IsTableBlocked(event.table_name)) {
-        return false; // Block the operation
+        DMLObserverRegistry::SetBlockReason(
+            "[IMMUNE:TABLE_BLOCKED] Table '" + event.table_name +
+            "' is currently blocked due to previous anomaly detection");
+        return false;
     }
 
     // Check if user is blocked
     if (!event.user.empty() && response_engine_->IsUserBlocked(event.user)) {
-        return false; // Block the operation
+        DMLObserverRegistry::SetBlockReason(
+            "[IMMUNE:USER_BLOCKED] User '" + event.user +
+            "' is currently blocked due to suspicious activity");
+        return false;
     }
 
     return true;
@@ -202,6 +243,18 @@ std::vector<std::string> ImmuneSystem::GetMonitoredTables() const {
 
 size_t ImmuneSystem::GetTotalAnomalies() const {
     return anomaly_detector_->GetTotalAnomalies();
+}
+
+uint64_t ImmuneSystem::GetTotalThreats() const {
+    return threat_detector_->GetTotalThreatsDetected();
+}
+
+uint64_t ImmuneSystem::GetSQLInjectionCount() const {
+    return threat_detector_->GetSQLInjectionCount();
+}
+
+uint64_t ImmuneSystem::GetXSSCount() const {
+    return threat_detector_->GetXSSCount();
 }
 
 void ImmuneSystem::Decay(double decay_factor) {

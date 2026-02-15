@@ -92,6 +92,11 @@ export interface AIDetailedResponse {
     thresholds?: { low: number; medium: number; high: number };
     recent_anomalies?: AIAnomaly[];
     summary?: string;
+    threat_detection?: {
+      total_threats: number;
+      sql_injection_count: number;
+      xss_count: number;
+    };
   };
   temporal_index?: {
     active: boolean;

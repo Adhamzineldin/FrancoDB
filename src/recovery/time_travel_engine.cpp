@@ -97,7 +97,7 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshot(
     // Reverse delta is better for recent past (fewer ops to undo)
     Strategy chosen = strategy;
     if (strategy == Strategy::AUTO) {
-        chosen = ChooseStrategy(target_time, actual_db);
+        chosen = ChooseStrategy(target_time, actual_db, table_name);
     }
 
     std::unique_ptr<TableHeap> result;
@@ -162,7 +162,7 @@ std::unique_ptr<InMemoryTableHeap> TimeTravelEngine::BuildSnapshotInMemory(
     }
 
     // Choose strategy based on operation count (not just time)
-    Strategy chosen = ChooseStrategy(target_time, actual_db);
+    Strategy chosen = ChooseStrategy(target_time, actual_db, table_name);
 
     std::unique_ptr<InMemoryTableHeap> result;
     if (chosen == Strategy::FORWARD_REPLAY) {
@@ -218,8 +218,17 @@ std::unique_ptr<InMemoryTableHeap> TimeTravelEngine::BuildSnapshotForwardReplayI
     std::unordered_multimap<std::string, size_t> key_to_indices;
     key_to_indices.reserve(10000);
 
-    std::string log_path = log_manager_->GetLogFilePath(db_name);
-    LOG_INFO(LOG_COMPONENT, "Forward replay: opening log file '%s'", log_path.c_str());
+    // Try per-table WAL first (fast path - only this table's records)
+    bool using_table_log = false;
+    std::string log_path;
+    if (log_manager_->HasTableLog(db_name, table_name)) {
+        log_path = log_manager_->GetTableLogFilePath(db_name, table_name);
+        using_table_log = true;
+        LOG_INFO(LOG_COMPONENT, "Forward replay: using per-table WAL '%s'", log_path.c_str());
+    } else {
+        log_path = log_manager_->GetLogFilePath(db_name);
+        LOG_INFO(LOG_COMPONENT, "Forward replay: using main WAL '%s' (no per-table WAL)", log_path.c_str());
+    }
 
     LogPageReader reader(64);
     if (!reader.Open(log_path)) {
@@ -246,7 +255,8 @@ std::unique_ptr<InMemoryTableHeap> TimeTravelEngine::BuildSnapshotForwardReplayI
             break;
         }
 
-        if (record.table_name_ != table_name) {
+        // Per-table WAL contains only this table's records, skip filter
+        if (!using_table_log && record.table_name_ != table_name) {
             continue;
         }
 
@@ -413,22 +423,26 @@ std::unique_ptr<InMemoryTableHeap> TimeTravelEngine::BuildSnapshotReverseDeltaIn
     LOG_DEBUG(LOG_COMPONENT, "Loaded %zu rows from current table", row_count);
 
     // PHASE 2: Read log and collect operations to undo
-    std::string log_path = log_manager_->GetLogFilePath(db_name);
-    LOG_INFO(LOG_COMPONENT, "Reverse delta: opening log file '%s'", log_path.c_str());
+    // Try per-table WAL first (fast path)
+    bool using_table_log = false;
+    std::string log_path;
+    if (log_manager_->HasTableLog(db_name, table_name)) {
+        log_path = log_manager_->GetTableLogFilePath(db_name, table_name);
+        using_table_log = true;
+        LOG_INFO(LOG_COMPONENT, "Reverse delta: using per-table WAL '%s'", log_path.c_str());
+    } else {
+        log_path = log_manager_->GetLogFilePath(db_name);
+        LOG_INFO(LOG_COMPONENT, "Reverse delta: using main WAL '%s' (no per-table WAL)", log_path.c_str());
+    }
 
     LogPageReader reader(64);
     if (!reader.Open(log_path)) {
-        // BUG FIX: Don't silently return current state - log file is required for time travel!
         LOG_ERROR(LOG_COMPONENT, "Reverse delta: CANNOT open log file '%s' - time travel requires WAL log!",
                   log_path.c_str());
-        return nullptr;  // Return nullptr to indicate failure, not current state
+        return nullptr;
     }
 
     {
-        // NOTE: We intentionally start from the BEGINNING of the log, not from estimated offset
-        // Reason: Seeking to estimated offset lands mid-record, causing "Invalid record size" errors
-        // The log must be read sequentially from a known record boundary (position 0)
-        // We simply skip records with timestamp <= target_time
         reader.Seek(0);
 
         std::vector<InverseOperation> ops_to_undo;
@@ -450,7 +464,8 @@ std::unique_ptr<InMemoryTableHeap> TimeTravelEngine::BuildSnapshotReverseDeltaIn
                 continue;
             }
 
-            if (record.table_name_ != table_name) {
+            // Per-table WAL contains only this table's records, skip filter
+            if (!using_table_log && record.table_name_ != table_name) {
                 continue;
             }
 
@@ -633,7 +648,17 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
     // =========================================================================
     LOG_DEBUG(LOG_COMPONENT, "Phase 2: Scanning log for operations after target time");
 
-    std::string log_path = log_manager_->GetLogFilePath(db_name);
+    // Try per-table WAL first (fast path)
+    bool using_table_log = false;
+    std::string log_path;
+    if (log_manager_->HasTableLog(db_name, table_name)) {
+        log_path = log_manager_->GetTableLogFilePath(db_name, table_name);
+        using_table_log = true;
+        LOG_INFO(LOG_COMPONENT, "Reverse delta: using per-table WAL '%s'", log_path.c_str());
+    } else {
+        log_path = log_manager_->GetLogFilePath(db_name);
+        LOG_INFO(LOG_COMPONENT, "Reverse delta: using main WAL '%s' (no per-table WAL)", log_path.c_str());
+    }
 
     // Use page-cached reader (integrates with memory budget)
     LogPageReader reader(64); // 64 pages = 256KB cache
@@ -644,10 +669,6 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
     }
 
     {
-        // NOTE: We intentionally start from the BEGINNING of the log
-        // Reason: Seeking to estimated offset lands mid-record, causing "Invalid record size" errors
-        // The log must be read sequentially from a known record boundary (position 0)
-        // We simply skip records with timestamp <= target_time during the scan
         reader.Seek(0);
 
         std::vector<InverseOperation> ops_to_undo;
@@ -667,13 +688,12 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotReverseDelta(
             }
 
             // Skip records at or before target time
-            // (binary search gets us close, but we may need to skip a few more)
             if (record.timestamp_ <= target_time) {
                 continue;
             }
 
-            // Only this table
-            if (record.table_name_ != table_name) {
+            // Per-table WAL contains only this table's records, skip filter
+            if (!using_table_log && record.table_name_ != table_name) {
                 continue;
             }
 
@@ -953,7 +973,17 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotForwardReplay(
     std::unordered_multimap<std::string, std::vector<Value>> in_memory_table;
     in_memory_table.reserve(10000);
 
-    std::string log_path = log_manager_->GetLogFilePath(db_name);
+    // Try per-table WAL first (fast path)
+    bool using_table_log = false;
+    std::string log_path;
+    if (log_manager_->HasTableLog(db_name, table_name)) {
+        log_path = log_manager_->GetTableLogFilePath(db_name, table_name);
+        using_table_log = true;
+        LOG_INFO(LOG_COMPONENT, "Forward replay: using per-table WAL '%s'", log_path.c_str());
+    } else {
+        log_path = log_manager_->GetLogFilePath(db_name);
+    }
+
     LogPageReader reader(64);
     if (!reader.Open(log_path)) {
         return std::make_unique<TableHeap>(bpm_, nullptr);
@@ -974,7 +1004,7 @@ std::unique_ptr<TableHeap> TimeTravelEngine::BuildSnapshotForwardReplay(
             break;
         }
 
-        if (record.table_name_ != table_name) {
+        if (!using_table_log && record.table_name_ != table_name) {
             continue;
         }
 
@@ -1479,15 +1509,22 @@ std::streampos TimeTravelEngine::FindClosestLogOffset(std::ifstream&, uint64_t) 
  * This is more accurate than time-based interpolation because it measures
  * actual operation distribution, not assumed uniform time distribution.
  */
-TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t target_time, const std::string& db_name) {
+TimeTravelEngine::Strategy TimeTravelEngine::ChooseStrategy(uint64_t target_time, const std::string& db_name, const std::string& table_name) {
     if (!log_manager_) {
         LOG_WARN(LOG_COMPONENT, "ChooseStrategy: no log_manager, defaulting to REVERSE_DELTA");
         return Strategy::REVERSE_DELTA;
     }
 
-    std::string log_path = log_manager_->GetLogFilePath(db_name);
-    LOG_INFO(LOG_COMPONENT, "ChooseStrategy: checking log file '%s' for db '%s'",
-             log_path.c_str(), db_name.c_str());
+    // Use per-table WAL if available (much smaller file = faster strategy scan)
+    std::string log_path;
+    if (!table_name.empty() && log_manager_->HasTableLog(db_name, table_name)) {
+        log_path = log_manager_->GetTableLogFilePath(db_name, table_name);
+        LOG_INFO(LOG_COMPONENT, "ChooseStrategy: using per-table WAL '%s'", log_path.c_str());
+    } else {
+        log_path = log_manager_->GetLogFilePath(db_name);
+        LOG_INFO(LOG_COMPONENT, "ChooseStrategy: checking log file '%s' for db '%s'",
+                 log_path.c_str(), db_name.c_str());
+    }
 
     LogPageReader reader(32); // Moderate cache for scanning
     if (!reader.Open(log_path)) {

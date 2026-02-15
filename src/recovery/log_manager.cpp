@@ -234,8 +234,13 @@ namespace chronosdb {
             const char* crc_ptr = reinterpret_cast<const char*>(&crc);
             record_buf.insert(record_buf.end(), crc_ptr, crc_ptr + sizeof(uint32_t));
 
-            // 7. Append to Log Buffer
+            // 7. Append to Log Buffer (main WAL)
             log_buffer_.insert(log_buffer_.end(), record_buf.begin(), record_buf.end());
+
+            // 7a. Dual-write: also append to per-table WAL for fast time travel
+            if (!log_record.table_name_.empty() && log_record.IsDataModification()) {
+                WriteToTableLog(log_record.db_name_, log_record.table_name_, record_buf);
+            }
 
             // 7.5. Track LSN range in current buffer for write ordering
             if (buffer_start_lsn_ == LogRecord::INVALID_LSN) {
@@ -450,6 +455,15 @@ namespace chronosdb {
             }
 
             CloseCurrentLog();
+
+            // Close all per-table WAL file handles
+            for (auto& [key, file] : table_log_files_) {
+                if (file.is_open()) {
+                    file.flush();
+                    file.close();
+                }
+            }
+            table_log_files_.clear();
         } catch (const std::exception& e) {
             std::cerr << "[LogManager] Error during shutdown flush: " << e.what() << std::endl;
         } catch (...) {
@@ -557,8 +571,12 @@ namespace chronosdb {
             log_buffer_.clear();
         }
 
-        // 2. Close current log file
+        // 2. Close current log file and per-table handles
         CloseCurrentLog();
+        for (auto& [key, file] : table_log_files_) {
+            if (file.is_open()) { file.flush(); file.close(); }
+        }
+        table_log_files_.clear();
 
         // 3. Open new log file
         current_db_ = db_name;
@@ -687,9 +705,47 @@ namespace chronosdb {
         return base_data_dir_ + "/" + db_name + "/wal.log";
     }
 
+    std::string LogManager::GetTableLogFilePath(const std::string& db_name, const std::string& table_name) const {
+        return base_data_dir_ + "/" + db_name + "/wal/" + table_name + ".wal";
+    }
+
+    bool LogManager::HasTableLog(const std::string& db_name, const std::string& table_name) const {
+        std::string path = GetTableLogFilePath(db_name, table_name);
+        return std::filesystem::exists(path) && std::filesystem::file_size(path) > 0;
+    }
+
     std::streampos LogManager::GetCurrentOffset() const {
         std::lock_guard<std::mutex> lock(latch_);
         return current_file_offset_;
+    }
+
+    void LogManager::WriteToTableLog(const std::string& db_name, const std::string& table_name,
+                                      const std::vector<char>& record_buf) {
+        // Build key for the file handle map
+        std::string key = db_name + "/" + table_name;
+
+        auto it = table_log_files_.find(key);
+        if (it == table_log_files_.end() || !it->second.is_open()) {
+            // Open (or reopen) the per-table WAL file
+            std::string path = GetTableLogFilePath(db_name, table_name);
+
+            // Ensure wal/ directory exists
+            std::filesystem::path p(path);
+            std::filesystem::create_directories(p.parent_path());
+
+            // Open in append + binary mode
+            auto& file = table_log_files_[key];
+            file.open(path, std::ios::binary | std::ios::out | std::ios::app);
+            if (!file.is_open()) {
+                std::cerr << "[LogManager] WARNING: Failed to open per-table WAL: " << path << std::endl;
+                return;
+            }
+            it = table_log_files_.find(key);
+        }
+
+        // Write the serialized record (same bytes as main WAL)
+        it->second.write(record_buf.data(), static_cast<std::streamsize>(record_buf.size()));
+        it->second.flush();
     }
 
     void LogManager::OpenLogFile(const std::string& db_name) {

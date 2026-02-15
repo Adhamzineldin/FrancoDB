@@ -100,6 +100,32 @@ void TestAISchedulerOneShotTask();
 void TestAISchedulerTaskListing();
 void TestAISchedulerCancellation();
 
+// AI Module Tests - Threat Detection (SQL Injection & XSS)
+void TestThreatDetectorSQLInjectionHigh();
+void TestThreatDetectorSQLInjectionMedium();
+void TestThreatDetectorSQLInjectionLow();
+void TestThreatDetectorXSSHigh();
+void TestThreatDetectorXSSMedium();
+void TestThreatDetectorXSSLow();
+void TestThreatDetectorCleanQueries();
+void TestThreatDetectorCaseInsensitive();
+void TestThreatDetectorCombinedAnalysis();
+void TestThreatDetectorToAnomalyReport();
+void TestThreatDetectorStats();
+
+// AI Module Tests - Query Plan Optimizer (Filter & Limit Strategy)
+void TestOptimizerFilterStrategyLearning();
+void TestOptimizerLimitStrategyLearning();
+void TestOptimizerRecordFeedback();
+void TestOptimizerSelectivityModel();
+void TestOptimizerStatePersistence();
+void TestOptimizerDecay();
+void TestOptimizerReset();
+
+// AI Module Tests - Temporal Integration
+void TestTemporalIntegrationRealisticWorkload();
+void TestTemporalCUSUMWithRealisticPatterns();
+
 int main(int, char**) {
     using namespace chronosdb_test;
     
@@ -213,6 +239,8 @@ int main(int, char**) {
     runner.RunTest("AI-Temporal", "No Hotspots", [] { TestHotspotDetectorNoHotspots(); });
     runner.RunTest("AI-Temporal", "CUSUM Change Points", [] { TestHotspotDetectorCUSUM(); });
     runner.RunTest("AI-Temporal", "Single Cluster", [] { TestHotspotDetectorSingleCluster(); });
+    runner.RunTest("AI-Temporal", "Realistic Workload", [] { TestTemporalIntegrationRealisticWorkload(); });
+    runner.RunTest("AI-Temporal", "CUSUM Realistic", [] { TestTemporalCUSUMWithRealisticPatterns(); });
 
     // AI MODULE - SCHEDULER
     std::cout << "\n╔═══ AI: SCHEDULER ═══╗" << std::endl;
@@ -221,6 +249,30 @@ int main(int, char**) {
     runner.RunTest("AI-Scheduler", "One-Shot Task", [] { TestAISchedulerOneShotTask(); });
     runner.RunTest("AI-Scheduler", "Task Listing", [] { TestAISchedulerTaskListing(); });
     runner.RunTest("AI-Scheduler", "Cancellation", [] { TestAISchedulerCancellation(); });
+
+    // AI MODULE - THREAT DETECTION (SQL Injection & XSS)
+    std::cout << "\n╔═══ AI: THREAT DETECTION ═══╗" << std::endl;
+    runner.RunTest("AI-Threat", "SQL Injection HIGH", [] { TestThreatDetectorSQLInjectionHigh(); });
+    runner.RunTest("AI-Threat", "SQL Injection MEDIUM", [] { TestThreatDetectorSQLInjectionMedium(); });
+    runner.RunTest("AI-Threat", "SQL Injection LOW", [] { TestThreatDetectorSQLInjectionLow(); });
+    runner.RunTest("AI-Threat", "XSS HIGH", [] { TestThreatDetectorXSSHigh(); });
+    runner.RunTest("AI-Threat", "XSS MEDIUM", [] { TestThreatDetectorXSSMedium(); });
+    runner.RunTest("AI-Threat", "XSS LOW", [] { TestThreatDetectorXSSLow(); });
+    runner.RunTest("AI-Threat", "Clean Queries", [] { TestThreatDetectorCleanQueries(); });
+    runner.RunTest("AI-Threat", "Case Insensitive", [] { TestThreatDetectorCaseInsensitive(); });
+    runner.RunTest("AI-Threat", "Combined Analysis", [] { TestThreatDetectorCombinedAnalysis(); });
+    runner.RunTest("AI-Threat", "To Anomaly Report", [] { TestThreatDetectorToAnomalyReport(); });
+    runner.RunTest("AI-Threat", "Stats Tracking", [] { TestThreatDetectorStats(); });
+
+    // AI MODULE - QUERY PLAN OPTIMIZER (Filter & Limit Strategy)
+    std::cout << "\n╔═══ AI: QUERY OPTIMIZER ═══╗" << std::endl;
+    runner.RunTest("AI-Optimizer", "Filter Strategy Learning", [] { TestOptimizerFilterStrategyLearning(); });
+    runner.RunTest("AI-Optimizer", "Limit Strategy Learning", [] { TestOptimizerLimitStrategyLearning(); });
+    runner.RunTest("AI-Optimizer", "Record Feedback", [] { TestOptimizerRecordFeedback(); });
+    runner.RunTest("AI-Optimizer", "Selectivity Model", [] { TestOptimizerSelectivityModel(); });
+    runner.RunTest("AI-Optimizer", "State Persistence", [] { TestOptimizerStatePersistence(); });
+    runner.RunTest("AI-Optimizer", "Decay", [] { TestOptimizerDecay(); });
+    runner.RunTest("AI-Optimizer", "Reset", [] { TestOptimizerReset(); });
 
     // INTEGRATION
     std::cout << "\n╔═══ INTEGRATION ═══╗" << std::endl;

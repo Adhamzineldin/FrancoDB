@@ -548,6 +548,86 @@ input::placeholder, textarea::placeholder {
   50% { opacity: 0.4; }
 }
 
+.db-badge-clickable {
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.db-badge-clickable:hover {
+  background: var(--accent-border);
+  border-color: var(--accent);
+}
+
+.db-switch-icon {
+  font-size: 0.65rem;
+  opacity: 0.6;
+  margin-left: 0.125rem;
+}
+
+.db-modal {
+  max-width: 400px;
+}
+
+.db-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.db-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  width: 100%;
+  text-align: left;
+}
+
+.db-list-item:hover {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.db-list-item.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.db-list-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.db-list-current {
+  font-size: 0.7rem;
+  padding: 0.125rem 0.5rem;
+  background: var(--accent);
+  color: white;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+}
+
 .content-area {
   flex: 1;
   overflow-y: auto;
@@ -2145,4 +2225,89 @@ input::placeholder, textarea::placeholder {
 .badge-red {
   background: var(--red-bg);
   color: var(--red);
+}
+
+/* ══════════════════════════════════════════════════
+   Info Tip (i) Tooltips
+   ══════════════════════════════════════════════════ */
+.info-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  cursor: help;
+  vertical-align: middle;
+}
+
+.info-tip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border-light);
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, serif;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.info-tip:hover .info-tip-icon {
+  background: var(--accent);
+  color: white;
+}
+
+.info-tip-popup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  text-transform: none;
+  letter-spacing: normal;
+  z-index: 100;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.info-tip-popup::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border-light);
+}
+
+/* Threat Detection Section */
+.threat-detection-section {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.threat-detection-section h4 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
+}
+
+.immune-metric-card.warn {
+  border-color: rgba(234, 179, 8, 0.3);
 }

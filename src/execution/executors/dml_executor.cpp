@@ -76,8 +76,27 @@ ExecutionResult DMLExecutor::Insert(InsertStatement* stmt, Transaction* txn) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
+    // Build query text for threat detection
+    {
+        std::string qt = "INSERT INTO " + stmt->table_name_;
+        if (stmt->IsMultiRowInsert()) {
+            for (const auto& row : stmt->value_rows_) {
+                for (const auto& val : row) {
+                    qt += " " + val.ToString();
+                }
+            }
+        } else {
+            for (const auto& val : stmt->values_) {
+                qt += " " + val.ToString();
+            }
+        }
+        ai_event.query_text = std::move(qt);
+    }
+
     if (!ai::DMLObserverRegistry::Instance().NotifyBefore(ai_event)) {
-        return ExecutionResult::Error("[IMMUNE] INSERT blocked on table '" + stmt->table_name_ + "'");
+        std::string reason = ai::DMLObserverRegistry::GetLastBlockReason();
+        if (reason.empty()) reason = "[IMMUNE] INSERT blocked on table '" + stmt->table_name_ + "'";
+        return ExecutionResult::Error(reason);
     }
 
     try {
@@ -148,6 +167,18 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
     ai_event.start_time_us = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
+
+    // Build query text for threat detection
+    {
+        std::string qt = "SELECT FROM " + stmt->table_name_;
+        for (const auto& col : stmt->columns_) {
+            qt += " " + col;
+        }
+        for (const auto& cond : stmt->where_clause_) {
+            qt += " " + cond.column + " " + cond.op + " " + cond.value.ToString();
+        }
+        ai_event.query_text = std::move(qt);
+    }
 
     // AI Temporal Index: notify on time-travel queries
     if (stmt->as_of_timestamp_ > 0) {
@@ -389,7 +420,10 @@ ExecutionResult DMLExecutor::Select(SelectStatement* stmt, SessionContext* sessi
             ai_event.total_rows_scanned = rows_scanned;
 
             // ---- Record Rich Feedback for Learning Engine ----
-            if (has_ai_plan) {
+            // Always record feedback, even for default plans (bootstrapping phase)
+            // This allows the optimizer to accumulate observations and transition
+            // from exploration to exploitation after MIN_SAMPLES_BEFORE_LEARNING queries
+            {
                 auto& ai_mgr = ai::AIManager::Instance();
                 if (ai_mgr.IsInitialized() && ai_mgr.GetLearningEngine()) {
                     ai::ExecutionFeedback feedback;
@@ -529,8 +563,20 @@ ExecutionResult DMLExecutor::Update(UpdateStatement* stmt, Transaction* txn) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
+    // Build query text for threat detection
+    {
+        std::string qt = "UPDATE " + stmt->table_name_ + " SET " +
+                          stmt->target_column_ + " = " + stmt->new_value_.ToString();
+        for (const auto& cond : stmt->where_clause_) {
+            qt += " " + cond.column + " " + cond.op + " " + cond.value.ToString();
+        }
+        ai_event.query_text = std::move(qt);
+    }
+
     if (!ai::DMLObserverRegistry::Instance().NotifyBefore(ai_event)) {
-        return ExecutionResult::Error("[IMMUNE] UPDATE blocked on table '" + stmt->table_name_ + "'");
+        std::string reason = ai::DMLObserverRegistry::GetLastBlockReason();
+        if (reason.empty()) reason = "[IMMUNE] UPDATE blocked on table '" + stmt->table_name_ + "'";
+        return ExecutionResult::Error(reason);
     }
 
     try {
@@ -587,8 +633,19 @@ ExecutionResult DMLExecutor::Delete(DeleteStatement* stmt, Transaction* txn) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
+    // Build query text for threat detection
+    {
+        std::string qt = "DELETE FROM " + stmt->table_name_;
+        for (const auto& cond : stmt->where_clause_) {
+            qt += " " + cond.column + " " + cond.op + " " + cond.value.ToString();
+        }
+        ai_event.query_text = std::move(qt);
+    }
+
     if (!ai::DMLObserverRegistry::Instance().NotifyBefore(ai_event)) {
-        return ExecutionResult::Error("[IMMUNE] DELETE blocked on table '" + stmt->table_name_ + "'");
+        std::string reason = ai::DMLObserverRegistry::GetLastBlockReason();
+        if (reason.empty()) reason = "[IMMUNE] DELETE blocked on table '" + stmt->table_name_ + "'";
+        return ExecutionResult::Error(reason);
     }
 
     try {

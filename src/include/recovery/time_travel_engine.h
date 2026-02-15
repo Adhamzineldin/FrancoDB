@@ -212,7 +212,7 @@ private:
      * - If target is before last checkpoint: FORWARD_REPLAY (need full history)
      * - Otherwise: REVERSE_DELTA
      */
-    Strategy ChooseStrategy(uint64_t target_time, const std::string& db_name);
+    Strategy ChooseStrategy(uint64_t target_time, const std::string& db_name, const std::string& table_name = "");
 
     /**
      * Estimate number of operations between target_time and now.

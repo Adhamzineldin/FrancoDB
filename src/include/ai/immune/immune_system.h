@@ -7,6 +7,7 @@
 #include "ai/ai_scheduler.h"
 #include "ai/dml_observer.h"
 #include "ai/immune/anomaly_detector.h"
+#include "ai/immune/threat_detector.h"
 
 namespace chronosdb {
 
@@ -52,6 +53,11 @@ public:
     std::vector<std::string> GetMonitoredTables() const;
     size_t GetTotalAnomalies() const;
 
+    // Threat detection stats
+    uint64_t GetTotalThreats() const;
+    uint64_t GetSQLInjectionCount() const;
+    uint64_t GetXSSCount() const;
+
     // Decay/Relearning - adapt to changing workloads
     void Decay(double decay_factor);
     void PeriodicMaintenance();  // Called by AIScheduler
@@ -65,6 +71,7 @@ private:
     std::unique_ptr<UserBehaviorProfiler> user_profiler_;
     std::unique_ptr<AnomalyDetector> anomaly_detector_;
     std::unique_ptr<ResponseEngine> response_engine_;
+    std::unique_ptr<ThreatDetector> threat_detector_;
 
     TaskId periodic_task_id_{0};
     std::atomic<bool> active_{false};

@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { Page, UserInfo } from '../types';
+import { api } from '../api';
 
 interface LayoutProps {
   user: UserInfo;
@@ -7,6 +9,7 @@ interface LayoutProps {
   page: Page;
   onNavigate: (page: Page) => void;
   onLogout: () => void;
+  onUseDatabase?: (db: string) => Promise<any>;
   children: ReactNode;
 }
 
@@ -20,8 +23,34 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'ai-status', label: 'AI Layer', icon: '⚡' },
 ];
 
-export default function Layout({ user, currentDb, page, onNavigate, onLogout, children }: LayoutProps) {
+export default function Layout({ user, currentDb, page, onNavigate, onLogout, onUseDatabase, children }: LayoutProps) {
   const isAdmin = user.role.includes('SUPER') || user.role.includes('ADMIN');
+
+  // Database switcher modal state
+  const [showDbModal, setShowDbModal] = useState(false);
+  const [databases, setDatabases] = useState<string[]>([]);
+  const [loadingDbs, setLoadingDbs] = useState(false);
+
+  useEffect(() => {
+    if (showDbModal) {
+      setLoadingDbs(true);
+      api.getDatabases()
+        .then((res: any) => {
+          if (res.data?.rows) {
+            setDatabases(res.data.rows.map((r: string[]) => r[0]).filter((d: string) => d));
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoadingDbs(false));
+    }
+  }, [showDbModal]);
+
+  const handleSwitchDb = async (db: string) => {
+    if (onUseDatabase) {
+      await onUseDatabase(db);
+    }
+    setShowDbModal(false);
+  };
 
   return (
     <div className="app-layout">
@@ -79,12 +108,15 @@ export default function Layout({ user, currentDb, page, onNavigate, onLogout, ch
             </h2>
           </div>
           <div className="topbar-right">
-            {currentDb && (
-              <div className="db-badge">
-                <span className="db-dot" />
-                {currentDb}
-              </div>
-            )}
+            <div
+              className="db-badge db-badge-clickable"
+              onClick={() => setShowDbModal(true)}
+              title="Click to switch database"
+            >
+              <span className="db-dot" />
+              {currentDb || 'No DB selected'}
+              <span className="db-switch-icon">&#9662;</span>
+            </div>
           </div>
         </header>
 
@@ -92,6 +124,39 @@ export default function Layout({ user, currentDb, page, onNavigate, onLogout, ch
           {children}
         </div>
       </main>
+
+      {/* Database Switcher Modal */}
+      {showDbModal && (
+        <div className="modal-overlay" onClick={() => setShowDbModal(false)}>
+          <div className="modal-content db-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Switch Database</h3>
+              <button className="modal-close" onClick={() => setShowDbModal(false)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              {loadingDbs ? (
+                <p className="text-muted">Loading databases...</p>
+              ) : databases.length > 0 ? (
+                <div className="db-list">
+                  {databases.map(db => (
+                    <button
+                      key={db}
+                      className={`db-list-item ${db === currentDb ? 'active' : ''}`}
+                      onClick={() => handleSwitchDb(db)}
+                    >
+                      <span className="db-dot" />
+                      <span className="db-list-name">{db}</span>
+                      {db === currentDb && <span className="db-list-current">current</span>}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted">No databases found. Create one in the Databases tab.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

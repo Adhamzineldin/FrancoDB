@@ -102,7 +102,7 @@ export default function App() {
       content = <AIStatus />;
       break;
     case 'testing':
-      content = <TestingPage currentDb={currentDb} />;
+      content = <TestingPage currentDb={currentDb} onUseDatabase={handleUseDatabase} />;
       break;
     default:
       content = <Dashboard onNavigate={setPage} />;
@@ -115,6 +115,7 @@ export default function App() {
       page={page}
       onNavigate={setPage}
       onLogout={handleLogout}
+      onUseDatabase={handleUseDatabase}
     >
       {content}
     </Layout>

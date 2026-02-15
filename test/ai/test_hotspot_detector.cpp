@@ -315,3 +315,195 @@ void TestHotspotDetectorSingleCluster() {
 
     std::cout << "[SUCCESS] HotspotDetector Single Cluster passed!" << std::endl;
 }
+
+// ========================================================================
+// REALISTIC WORKLOAD TESTS - Demonstrate temporal AI capabilities
+// ========================================================================
+
+void TestTemporalIntegrationRealisticWorkload() {
+    std::cout << "[TEST] Temporal Integration - Realistic Workload..." << std::endl;
+
+    TemporalAccessTracker tracker;
+    HotspotDetector detector;
+
+    // Scenario: A user investigates a data incident at timestamp ~T1,
+    // then a compliance team audits data around timestamp ~T2.
+    // Both create clear temporal hotspots. Scattered queries are noise.
+
+    uint64_t base_time = 1000000000ULL;  // Base timestamp
+    uint64_t T1 = base_time + 3600ULL * 1000000;  // T1 = base + 1 hour
+    uint64_t T2 = base_time + 7200ULL * 1000000;  // T2 = base + 2 hours
+
+    // Phase 1: 30 queries investigating T1 (spread over 30 seconds around T1)
+    std::vector<TemporalAccessEvent> all_events;
+    uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    for (int i = 0; i < 30; i++) {
+        uint64_t queried_ts = T1 + static_cast<uint64_t>(i) * 1000000ULL;  // 1s apart
+        TemporalAccessEvent e;
+        e.table_name = "orders";
+        e.queried_timestamp_us = queried_ts;
+        e.query_time_us = now_us + static_cast<uint64_t>(i) * 100;
+        e.db_name = "incident_db";
+        tracker.RecordAccess(e);
+        all_events.push_back(e);
+    }
+    std::cout << "  -> Recorded 30 queries around T1 (incident investigation)" << std::endl;
+
+    // Phase 2: 5 scattered noise queries (widely spread, won't cluster)
+    for (int i = 0; i < 5; i++) {
+        uint64_t noise_ts = base_time + static_cast<uint64_t>(i) * 600000000ULL;  // 10min apart
+        TemporalAccessEvent e;
+        e.table_name = "orders";
+        e.queried_timestamp_us = noise_ts;
+        e.query_time_us = now_us + 30000 + static_cast<uint64_t>(i) * 100;
+        e.db_name = "incident_db";
+        tracker.RecordAccess(e);
+        all_events.push_back(e);
+    }
+    std::cout << "  -> Recorded 5 scattered noise queries" << std::endl;
+
+    // Phase 3: 20 queries auditing around T2 (spread over 20 seconds)
+    for (int i = 0; i < 20; i++) {
+        uint64_t queried_ts = T2 + static_cast<uint64_t>(i) * 1000000ULL;  // 1s apart
+        TemporalAccessEvent e;
+        e.table_name = "financial";
+        e.queried_timestamp_us = queried_ts;
+        e.query_time_us = now_us + 60000 + static_cast<uint64_t>(i) * 100;
+        e.db_name = "audit_db";
+        tracker.RecordAccess(e);
+        all_events.push_back(e);
+    }
+    std::cout << "  -> Recorded 20 queries around T2 (compliance audit)" << std::endl;
+
+    // Verify total access count
+    assert(tracker.GetTotalAccessCount() == 55);
+    std::cout << "  -> Total accesses tracked = " << tracker.GetTotalAccessCount() << std::endl;
+
+    // Run DBSCAN hotspot detection
+    auto hotspots = detector.DetectHotspots(all_events);
+    std::cout << "  -> DBSCAN detected " << hotspots.size() << " hotspots" << std::endl;
+    assert(hotspots.size() >= 2);  // Should find at least 2 clusters
+
+    // Verify hotspot properties
+    bool found_t1_hotspot = false;
+    bool found_t2_hotspot = false;
+    for (const auto& hs : hotspots) {
+        std::cout << "    Hotspot: center=" << hs.center_timestamp_us
+                  << ", count=" << hs.access_count
+                  << ", density=" << hs.density << std::endl;
+        if (hs.center_timestamp_us >= T1 && hs.center_timestamp_us <= T1 + 30000000ULL) {
+            found_t1_hotspot = true;
+            assert(hs.access_count >= 20);  // Should contain most of the 30 queries
+        }
+        if (hs.center_timestamp_us >= T2 && hs.center_timestamp_us <= T2 + 20000000ULL) {
+            found_t2_hotspot = true;
+            assert(hs.access_count >= 15);  // Should contain most of the 20 queries
+        }
+    }
+    assert(found_t1_hotspot);
+    assert(found_t2_hotspot);
+    std::cout << "  -> T1 hotspot found with sufficient access count" << std::endl;
+    std::cout << "  -> T2 hotspot found with sufficient access count" << std::endl;
+
+    // Verify hot timestamps
+    auto hot_ts = tracker.GetHotTimestamps(5);
+    assert(!hot_ts.empty());
+    std::cout << "  -> Top hot timestamps: " << hot_ts.size() << " returned" << std::endl;
+
+    // Verify frequency histogram shows activity
+    auto histogram = tracker.GetFrequencyHistogram(60ULL * 1000000);  // 1-minute buckets
+    assert(!histogram.empty());
+    std::cout << "  -> Frequency histogram has " << histogram.size() << " buckets" << std::endl;
+
+    std::cout << "[SUCCESS] Temporal Integration - Realistic Workload passed!" << std::endl;
+}
+
+void TestTemporalCUSUMWithRealisticPatterns() {
+    std::cout << "[TEST] Temporal CUSUM - Realistic Patterns..." << std::endl;
+
+    HotspotDetector detector;
+
+    // Build a rate time series simulating:
+    // Phase 1: 100 intervals of normal rate (~10 mutations/interval)
+    // Phase 2: 30 intervals of high rate (~100 mutations/interval) - batch import
+    // Phase 3: 70 intervals back to normal rate (~10 mutations/interval)
+    std::vector<double> rate_series;
+    std::vector<uint64_t> timestamps;
+    uint64_t ts_base = 1000000000ULL;  // Base timestamp
+    uint64_t interval_us = 60ULL * 1000000;  // 1-minute intervals
+
+    // Phase 1: Normal (with small variance)
+    for (int i = 0; i < 100; i++) {
+        rate_series.push_back(10.0 + (i % 5) * 0.5);  // 10.0 - 12.0
+        timestamps.push_back(ts_base + static_cast<uint64_t>(i) * interval_us);
+    }
+
+    // Phase 2: Spike (batch import)
+    for (int i = 0; i < 30; i++) {
+        rate_series.push_back(100.0 + (i % 3) * 5.0);  // 100.0 - 110.0
+        timestamps.push_back(ts_base + static_cast<uint64_t>(100 + i) * interval_us);
+    }
+
+    // Phase 3: Return to normal
+    for (int i = 0; i < 70; i++) {
+        rate_series.push_back(10.0 + (i % 5) * 0.5);  // 10.0 - 12.0
+        timestamps.push_back(ts_base + static_cast<uint64_t>(130 + i) * interval_us);
+    }
+
+    std::cout << "  -> Built rate series: 100 normal + 30 spike + 70 normal = "
+              << rate_series.size() << " intervals" << std::endl;
+
+    // Run CUSUM change-point detection
+    auto change_points = detector.DetectChangePoints(rate_series, timestamps);
+    std::cout << "  -> CUSUM detected " << change_points.size() << " change points" << std::endl;
+
+    // Should detect at least 1 change point (at the normal->spike transition)
+    assert(!change_points.empty());
+
+    // Print change points for visibility
+    for (uint64_t cp_ts : change_points) {
+        // Find approximate index for display
+        size_t idx = 0;
+        for (size_t j = 0; j < timestamps.size(); j++) {
+            if (timestamps[j] == cp_ts) { idx = j; break; }
+        }
+        std::cout << "    Change point at index ~" << idx
+                  << " (timestamp=" << cp_ts
+                  << ", rate=" << (idx < rate_series.size() ? rate_series[idx] : 0.0) << ")" << std::endl;
+    }
+
+    // At least one change point should be near the normal->spike transition
+    // The transition happens at index 100, which maps to timestamps around ts_base + 100*interval
+    uint64_t transition_ts = ts_base + 100 * interval_us;
+    bool found_near_transition = false;
+    for (uint64_t cp_ts : change_points) {
+        // Allow a window of +/- 20 intervals around the transition
+        if (cp_ts >= transition_ts - 20 * interval_us &&
+            cp_ts <= transition_ts + 40 * interval_us) {
+            found_near_transition = true;
+            break;
+        }
+    }
+    assert(found_near_transition);
+    std::cout << "  -> Change point detected near normal->spike transition" << std::endl;
+
+    // Test with flat series (no change points expected)
+    std::vector<double> flat_rates(100, 10.0);
+    std::vector<uint64_t> flat_ts;
+    for (int i = 0; i < 100; i++) {
+        flat_ts.push_back(ts_base + static_cast<uint64_t>(i) * interval_us);
+    }
+    auto flat_cps = detector.DetectChangePoints(flat_rates, flat_ts);
+    assert(flat_cps.empty());
+    std::cout << "  -> Flat series correctly produces no change points" << std::endl;
+
+    // Test with empty series
+    std::vector<double> empty_rates;
+    std::vector<uint64_t> empty_ts;
+    auto empty_cps = detector.DetectChangePoints(empty_rates, empty_ts);
+    assert(empty_cps.empty());
+    std::cout << "  -> Empty series correctly produces no change points" << std::endl;
+
+    std::cout << "[SUCCESS] Temporal CUSUM - Realistic Patterns passed!" << std::endl;
+}

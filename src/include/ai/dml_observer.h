@@ -33,6 +33,9 @@ struct DMLEvent {
     int32_t limit_value = -1;
     int32_t result_row_count = 0;
     uint32_t total_rows_scanned = 0;  // Total rows examined before filtering
+
+    // Query text for content-based threat analysis (SQL injection, XSS detection)
+    std::string query_text;
 };
 
 /**
@@ -72,11 +75,17 @@ public:
     void Unregister(IDMLObserver* observer);
 
     // Returns false if ANY observer blocks the operation
+    // If blocked, GetLastBlockReason() returns the reason string
     bool NotifyBefore(const DMLEvent& event);
 
     void NotifyAfter(const DMLEvent& event);
 
     size_t GetObserverCount() const;
+
+    // Get the reason for the last block (thread-local, set by NotifyBefore)
+    static std::string GetLastBlockReason();
+    // Set block reason (called by observers when they block)
+    static void SetBlockReason(const std::string& reason);
 
 private:
     DMLObserverRegistry() = default;
