@@ -719,7 +719,7 @@ HttpResponse HttpHandler::HandleCreateUser(const HttpRequest& req) {
     }
     if (role.empty()) role = "READONLY";
 
-    auto result = ExecuteSQL("CREATE USER '" + username + "' '" + password + "' " + role + ";", session);
+    auto result = ExecuteSQL("CREATE USER '" + username + "' pass '" + password + "' role " + role + ";", session);
     resp.SetJson(ResultToJson(result));
     return resp;
 }

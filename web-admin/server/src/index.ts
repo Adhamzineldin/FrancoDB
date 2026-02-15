@@ -317,7 +317,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
     }
     const client = await getClient(req);
     const roleStr = role || 'READONLY';
-    const result = await client.query(`CREATE USER '${username}' '${password}' ${roleStr}`);
+    const result = await client.query(`CREATE USER '${username}' pass '${password}' role ${roleStr}`);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
