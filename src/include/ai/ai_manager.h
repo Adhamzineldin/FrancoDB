@@ -68,6 +68,9 @@ private:
 
     std::string GetStateDirectory() const;
 
+    // Compute dynamic decay factor based on recent query activity
+    double ComputeActivityDecayFactor() const;
+
     std::unique_ptr<LearningEngine> learning_engine_;
     std::unique_ptr<ImmuneSystem> immune_system_;
     std::unique_ptr<TemporalIndexManager> temporal_index_mgr_;

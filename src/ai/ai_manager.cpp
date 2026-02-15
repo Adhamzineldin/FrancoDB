@@ -113,17 +113,70 @@ void AIManager::Shutdown() {
     LOG_INFO("AIManager", "AI Layer shut down");
 }
 
+double AIManager::ComputeActivityDecayFactor() const {
+    // Count all DML queries in the last decay interval window
+    uint64_t window_us = static_cast<uint64_t>(AI_DECAY_INTERVAL_MS) * 1000;
+
+    uint64_t query_count = 0;
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_SELECT, window_us);
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_INSERT, window_us);
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_UPDATE, window_us);
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_DELETE, window_us);
+
+    // If activity is below idle threshold → no decay at all (users are sleeping/inactive)
+    if (query_count < AI_DECAY_IDLE_THRESHOLD) {
+        return AI_DECAY_MAX; // 1.0 = no decay
+    }
+
+    // Compute activity ratio: how active vs "normal"
+    double activity_ratio = static_cast<double>(query_count) / static_cast<double>(AI_DECAY_NORMAL_QUERY_COUNT);
+
+    // Map activity_ratio to decay factor:
+    //   ratio 0.0 → AI_DECAY_MAX (1.0, no decay)
+    //   ratio 1.0 → AI_DECAY_BASELINE (0.8, normal decay)
+    //   ratio >= AI_DECAY_HIGH_ACTIVITY_RATIO → AI_DECAY_MIN (0.6, aggressive decay)
+    double decay_factor;
+    if (activity_ratio <= 1.0) {
+        // Low-to-normal activity: interpolate between MAX and BASELINE
+        decay_factor = AI_DECAY_MAX - activity_ratio * (AI_DECAY_MAX - AI_DECAY_BASELINE);
+    } else {
+        // Above normal: interpolate between BASELINE and MIN
+        double excess = (activity_ratio - 1.0) / (AI_DECAY_HIGH_ACTIVITY_RATIO - 1.0);
+        if (excess > 1.0) excess = 1.0;
+        decay_factor = AI_DECAY_BASELINE - excess * (AI_DECAY_BASELINE - AI_DECAY_MIN);
+    }
+
+    return decay_factor;
+}
+
 void AIManager::PeriodicMaintenance() {
     if (!initialized_.load()) return;
 
-    LOG_INFO("AIManager", "Running periodic AI maintenance (adaptation to workload changes)...");
+    double decay_factor = ComputeActivityDecayFactor();
 
-    // Apply decay to all AI components to allow adaptation
+    // Count queries for logging
+    uint64_t window_us = static_cast<uint64_t>(AI_DECAY_INTERVAL_MS) * 1000;
+    uint64_t query_count = 0;
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_SELECT, window_us);
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_INSERT, window_us);
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_UPDATE, window_us);
+    query_count += MetricsStore::Instance().CountEvents(MetricType::DML_DELETE, window_us);
+
+    if (decay_factor >= 0.999) {
+        LOG_INFO("AIManager", "Periodic maintenance: " + std::to_string(query_count) +
+                 " queries in last interval - system idle, skipping decay");
+    } else {
+        LOG_INFO("AIManager", "Periodic maintenance: " + std::to_string(query_count) +
+                 " queries in last interval → dynamic decay factor=" +
+                 std::to_string(decay_factor).substr(0, 4));
+    }
+
+    // Apply dynamic decay to all AI components
     if (learning_engine_) {
-        learning_engine_->PeriodicMaintenance();
+        learning_engine_->Decay(decay_factor);
     }
     if (immune_system_) {
-        immune_system_->PeriodicMaintenance();
+        immune_system_->Decay(decay_factor);
     }
     // Temporal index manager already has its own periodic analysis
 

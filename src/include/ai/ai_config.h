@@ -36,15 +36,38 @@ static constexpr size_t QUERY_FEATURE_DIMENSIONS = 8;
 static constexpr double REWARD_SCALE_MS = 100.0;
 
 // ========================================================================
-// AI RELEARNING / DECAY (Adaptation to changing workloads)
+// AI RELEARNING / DECAY (Activity-Aware Adaptive Decay)
 // ========================================================================
 
-// Decay factor applied to historical data (0.0 = full reset, 1.0 = no decay)
-// Applied periodically to make recent data more influential
-static constexpr double AI_DECAY_FACTOR = 0.8;
+// Decay is DYNAMIC: computed from actual query activity each interval.
+// When users are idle (sleeping, off-hours), decay approaches 1.0 (no decay).
+// When activity is normal, decay is ~0.8. Under heavy load, decay is stronger (~0.6).
 
-// Interval for periodic decay/relearning (milliseconds) = 10 minutes
+// Interval for periodic decay check (milliseconds) = 10 minutes
 static constexpr uint32_t AI_DECAY_INTERVAL_MS = 10 * 60 * 1000;
+
+// --- Activity-based decay curve parameters ---
+
+// Minimum decay factor (applied at very high activity)
+static constexpr double AI_DECAY_MIN = 0.6;
+
+// Maximum decay factor (applied at zero/near-zero activity = essentially no decay)
+static constexpr double AI_DECAY_MAX = 1.0;
+
+// Default/baseline decay factor at "normal" activity level
+static constexpr double AI_DECAY_BASELINE = 0.8;
+
+// Number of queries per decay interval considered "normal" activity.
+// Below this → decay weakens toward 1.0. Above this → decay strengthens toward 0.6.
+static constexpr uint64_t AI_DECAY_NORMAL_QUERY_COUNT = 100;
+
+// Activity ratio above which decay is at its strongest (AI_DECAY_MIN)
+// e.g., 3.0 means 3x normal activity = maximum decay
+static constexpr double AI_DECAY_HIGH_ACTIVITY_RATIO = 3.0;
+
+// Minimum query count to trigger ANY decay at all.
+// Below this threshold, decay factor = 1.0 (no decay, system is idle).
+static constexpr uint64_t AI_DECAY_IDLE_THRESHOLD = 5;
 
 // Interval for full reset if workload changes dramatically (milliseconds) = 1 hour
 static constexpr uint32_t AI_FULL_RESET_INTERVAL_MS = 60 * 60 * 1000;

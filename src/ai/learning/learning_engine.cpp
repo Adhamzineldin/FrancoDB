@@ -160,9 +160,8 @@ void LearningEngine::Decay(double decay_factor) {
 void LearningEngine::PeriodicMaintenance() {
     if (!active_) return;
 
-    // Apply periodic decay to allow adaptation to changing workloads
-    Decay(AI_DECAY_FACTOR);
-
+    // Note: Decay is now called by AIManager with a dynamic activity-based factor.
+    // This method is kept for any future non-decay maintenance tasks.
     LOG_INFO("LearningEngine", "Periodic maintenance complete. Current state: " + GetSummary());
 }
 
