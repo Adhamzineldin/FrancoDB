@@ -11,6 +11,8 @@
 #include "storage/table/column.h"
 #include <iostream>
 #include <cmath>
+#include <ctime>
+#include <cstdio>
 #include <unordered_set>
 
 namespace chronosdb {
@@ -37,25 +39,53 @@ namespace chronosdb {
                             "NULL values not allowed: column '" + col.GetName() + "'");
         }
 
-        // Check type compatibility
+        // Check type compatibility (validation only - actual conversion in CreateUpdatedTuple)
         if (val.GetTypeId() != col.GetType()) {
             if (col.GetType() == TypeId::INTEGER && val.GetTypeId() == TypeId::VARCHAR) {
-                try {
-                    std::stoi(val.GetAsString());
-                } catch (...) {
+                try { std::stoi(val.GetAsString()); } catch (...) {
                     throw Exception(ExceptionType::EXECUTION,
-                                    "Type mismatch for column '" + col.GetName() + "': expected INTEGER");
+                                    "Type mismatch on column '" + col.GetName() + "': expected INTEGER but got '"
+                                    + val.GetAsString() + "' (cannot convert to integer)");
                 }
             } else if (col.GetType() == TypeId::DECIMAL && val.GetTypeId() == TypeId::VARCHAR) {
-                try {
-                    std::stod(val.GetAsString());
-                } catch (...) {
+                try { std::stod(val.GetAsString()); } catch (...) {
                     throw Exception(ExceptionType::EXECUTION,
-                                    "Type mismatch for column '" + col.GetName() + "': expected DECIMAL");
+                                    "Type mismatch on column '" + col.GetName() + "': expected DECIMAL but got '"
+                                    + val.GetAsString() + "' (cannot convert to number)");
                 }
+            } else if (col.GetType() == TypeId::TIMESTAMP && val.GetTypeId() == TypeId::VARCHAR) {
+                // Will be auto-converted in CreateUpdatedTuple
+                const std::string& ds = val.GetAsString();
+                int d = 0, m = 0, y = 0;
+                if (std::sscanf(ds.c_str(), "%d/%d/%d", &d, &m, &y) < 3 &&
+                    std::sscanf(ds.c_str(), "%d-%d-%d", &d, &m, &y) < 3) {
+                    throw Exception(ExceptionType::EXECUTION,
+                        "Type mismatch on column '" + col.GetName() + "': expected DATE/TIMESTAMP but got '"
+                        + ds + "'. Use format: DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD");
+                }
+            } else if (col.GetType() == TypeId::BOOLEAN && val.GetTypeId() == TypeId::VARCHAR) {
+                std::string s = val.GetAsString();
+                for (auto& c : s) c = std::tolower(c);
+                if (s != "true" && s != "false" && s != "1" && s != "0" && s != "yes" && s != "no") {
+                    throw Exception(ExceptionType::EXECUTION,
+                        "Type mismatch on column '" + col.GetName() + "': expected BOOLEAN but got '"
+                        + val.GetAsString() + "'. Use: true/false, 1/0, or yes/no");
+                }
+            } else if (col.GetType() == TypeId::BOOLEAN && val.GetTypeId() == TypeId::INTEGER) {
+                // int to bool is fine
+            } else if (col.GetType() == TypeId::TIMESTAMP && val.GetTypeId() == TypeId::INTEGER) {
+                // Unix timestamp is fine
+            } else if (col.GetType() == TypeId::VARCHAR) {
+                // Anything can become a string
+            } else if (col.GetType() == TypeId::DECIMAL && val.GetTypeId() == TypeId::INTEGER) {
+                // int to decimal is fine
+            } else if (col.GetType() == TypeId::INTEGER && val.GetTypeId() == TypeId::DECIMAL) {
+                // decimal to int (truncate) is fine
             } else {
                 throw Exception(ExceptionType::EXECUTION,
-                                "Type mismatch for column '" + col.GetName() + "'");
+                                "Type mismatch on column '" + col.GetName() + "': expected "
+                                + Type::TypeToString(col.GetType()) + " but got "
+                                + Type::TypeToString(val.GetTypeId()));
             }
         }
     }

@@ -7,6 +7,8 @@
 #include "storage/page/page.h"
 #include <cmath>
 #include <iostream>
+#include <ctime>
+#include <cstdio>
 
 namespace chronosdb {
     struct ParsedConstraint {
@@ -93,7 +95,9 @@ namespace chronosdb {
 
             if (!plan_->column_names_.empty()) {
                 if (current_values.size() != plan_->column_names_.size()) {
-                    throw Exception(ExceptionType::EXECUTION, "Input value count does not match column name count");
+                    throw Exception(ExceptionType::EXECUTION,
+                        "Value count mismatch: provided " + std::to_string(current_values.size())
+                        + " values but specified " + std::to_string(plan_->column_names_.size()) + " columns");
                 }
                 for (size_t i = 0; i < plan_->column_names_.size(); ++i) {
                     int col_idx = table_info_->schema_.GetColIdx(plan_->column_names_[i]);
@@ -103,7 +107,10 @@ namespace chronosdb {
                 }
             } else {
                 if (current_values.size() != table_info_->schema_.GetColumnCount()) {
-                    throw Exception(ExceptionType::EXECUTION, "Column count mismatch");
+                    throw Exception(ExceptionType::EXECUTION,
+                        "Column count mismatch: table '" + plan_->table_name_ + "' has "
+                        + std::to_string(table_info_->schema_.GetColumnCount()) + " columns but "
+                        + std::to_string(current_values.size()) + " values were provided");
                 }
                 reordered_values = current_values;
             }
@@ -114,22 +121,109 @@ namespace chronosdb {
                 const Value &val = reordered_values[i];
 
                 // Null Check
-                if (val.GetTypeId() == TypeId::VARCHAR && val.GetAsString().empty()) {
-                    throw Exception(ExceptionType::EXECUTION, "NULL values not allowed: column '" + col.GetName() + "'");
+                if (!col.IsNullable() && val.GetTypeId() == TypeId::VARCHAR && val.GetAsString().empty()) {
+                    throw Exception(ExceptionType::EXECUTION,
+                        "NOT NULL constraint failed: column '" + col.GetName() + "' in table '"
+                        + plan_->table_name_ + "' cannot be empty/null");
                 }
 
-                // Type Compatibility
+                // Type Compatibility + Auto-Conversion
                 if (val.GetTypeId() != col.GetType()) {
                     if (col.GetType() == TypeId::INTEGER && val.GetTypeId() == TypeId::VARCHAR) {
                         try { std::stoi(val.GetAsString()); } catch (...) {
-                            throw Exception(ExceptionType::EXECUTION, "Type mismatch INT");
+                            throw Exception(ExceptionType::EXECUTION,
+                                "Type mismatch on column '" + col.GetName() + "': expected INTEGER but got '"
+                                + val.GetAsString() + "' (cannot convert to integer)");
                         }
                     } else if (col.GetType() == TypeId::DECIMAL && val.GetTypeId() == TypeId::VARCHAR) {
                         try { std::stod(val.GetAsString()); } catch (...) {
-                            throw Exception(ExceptionType::EXECUTION, "Type mismatch DECIMAL");
+                            throw Exception(ExceptionType::EXECUTION,
+                                "Type mismatch on column '" + col.GetName() + "': expected DECIMAL but got '"
+                                + val.GetAsString() + "' (cannot convert to number)");
                         }
+                    } else if (col.GetType() == TypeId::TIMESTAMP && val.GetTypeId() == TypeId::VARCHAR) {
+                        // Auto-convert date strings to TIMESTAMP
+                        // Supported formats: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD,
+                        //                    DD/MM/YYYY HH:MM, DD/MM/YYYY HH:MM:SS
+                        const std::string& ds = val.GetAsString();
+                        int day = 0, month = 0, year = 0, hour = 0, minute = 0, second = 0;
+                        int parsed = std::sscanf(ds.c_str(), "%d/%d/%d %d:%d:%d",
+                                                 &day, &month, &year, &hour, &minute, &second);
+                        if (parsed < 3) {
+                            // Try DD-MM-YYYY or YYYY-MM-DD format
+                            parsed = std::sscanf(ds.c_str(), "%d-%d-%d %d:%d:%d",
+                                                 &day, &month, &year, &hour, &minute, &second);
+                            if (parsed >= 3 && day > 31) {
+                                // YYYY-MM-DD format: sscanf parsed day=YYYY, month=MM, year=DD
+                                int real_year = day;
+                                int real_day = year;
+                                day = real_day;
+                                year = real_year;
+                            }
+                        }
+                        if (parsed < 3) {
+                            throw Exception(ExceptionType::EXECUTION,
+                                "Type mismatch on column '" + col.GetName() + "': expected DATE/TIMESTAMP but got '"
+                                + ds + "'. Use format: DD/MM/YYYY, DD-MM-YYYY, or DD/MM/YYYY HH:MM:SS");
+                        }
+                        if (month < 1 || month > 12 || day < 1 || day > 31) {
+                            throw Exception(ExceptionType::EXECUTION,
+                                "Invalid date on column '" + col.GetName() + "': day=" + std::to_string(day)
+                                + " month=" + std::to_string(month) + " year=" + std::to_string(year)
+                                + ". Day must be 1-31, month must be 1-12");
+                        }
+                        std::tm tm = {};
+                        tm.tm_mday = day;
+                        tm.tm_mon = month - 1;
+                        tm.tm_year = year - 1900;
+                        tm.tm_hour = hour;
+                        tm.tm_min = minute;
+                        tm.tm_sec = second;
+                        tm.tm_isdst = -1;
+                        std::time_t t = std::mktime(&tm);
+                        if (t == -1) {
+                            throw Exception(ExceptionType::EXECUTION,
+                                "Date conversion failed on column '" + col.GetName() + "': '"
+                                + ds + "' is not a valid date");
+                        }
+                        // Replace the value with a proper TIMESTAMP value
+                        reordered_values[i] = Value(TypeId::TIMESTAMP, static_cast<int32_t>(t));
+                    } else if (col.GetType() == TypeId::BOOLEAN && val.GetTypeId() == TypeId::VARCHAR) {
+                        // Auto-convert string to boolean
+                        std::string s = val.GetAsString();
+                        for (auto& c : s) c = std::tolower(c);
+                        if (s == "true" || s == "1" || s == "yes") {
+                            reordered_values[i] = Value(TypeId::BOOLEAN, 1);
+                        } else if (s == "false" || s == "0" || s == "no") {
+                            reordered_values[i] = Value(TypeId::BOOLEAN, 0);
+                        } else {
+                            throw Exception(ExceptionType::EXECUTION,
+                                "Type mismatch on column '" + col.GetName() + "': expected BOOLEAN but got '"
+                                + val.GetAsString() + "'. Use: true/false, 1/0, or yes/no");
+                        }
+                    } else if (col.GetType() == TypeId::BOOLEAN && val.GetTypeId() == TypeId::INTEGER) {
+                        // int to bool (0 = false, anything else = true)
+                        reordered_values[i] = Value(TypeId::BOOLEAN, val.GetAsInteger() != 0 ? 1 : 0);
+                    } else if (col.GetType() == TypeId::TIMESTAMP && val.GetTypeId() == TypeId::INTEGER) {
+                        // Unix timestamp integer to TIMESTAMP
+                        reordered_values[i] = Value(TypeId::TIMESTAMP, val.GetAsInteger());
+                    } else if (col.GetType() == TypeId::VARCHAR && val.GetTypeId() == TypeId::INTEGER) {
+                        // int to string
+                        reordered_values[i] = Value(TypeId::VARCHAR, std::to_string(val.GetAsInteger()));
+                    } else if (col.GetType() == TypeId::VARCHAR && val.GetTypeId() == TypeId::BOOLEAN) {
+                        // bool to string
+                        reordered_values[i] = Value(TypeId::VARCHAR, val.GetAsInteger() ? std::string("true") : std::string("false"));
+                    } else if (col.GetType() == TypeId::DECIMAL && val.GetTypeId() == TypeId::INTEGER) {
+                        // int to decimal
+                        reordered_values[i] = Value(TypeId::DECIMAL, static_cast<double>(val.GetAsInteger()));
+                    } else if (col.GetType() == TypeId::INTEGER && val.GetTypeId() == TypeId::DECIMAL) {
+                        // decimal to int (truncate)
+                        reordered_values[i] = Value(TypeId::INTEGER, static_cast<int32_t>(val.GetAsDouble()));
                     } else {
-                        throw Exception(ExceptionType::EXECUTION, "Type mismatch");
+                        throw Exception(ExceptionType::EXECUTION,
+                            "Type mismatch on column '" + col.GetName() + "': expected "
+                            + Type::TypeToString(col.GetType()) + " but got "
+                            + Type::TypeToString(val.GetTypeId()));
                     }
                 }
 
@@ -259,7 +353,10 @@ namespace chronosdb {
                     }
 
                     if (!found) {
-                        throw Exception(ExceptionType::EXECUTION, "FOREIGN KEY violation: " + local_col);
+                        throw Exception(ExceptionType::EXECUTION,
+                            "FOREIGN KEY constraint failed: value '" + fk_value.ToString()
+                            + "' in column '" + local_col + "' does not exist in '"
+                            + fk.ref_table + "." + ref_col + "'");
                     }
                 }
             }
@@ -274,7 +371,10 @@ namespace chronosdb {
                     std::vector<RID> result_rids;
                     index->b_plus_tree_->GetValue(key, &result_rids, txn_);
                     if (!result_rids.empty()) {
-                        throw Exception(ExceptionType::EXECUTION, "PRIMARY KEY violation: Duplicate");
+                        throw Exception(ExceptionType::EXECUTION,
+                            "PRIMARY KEY constraint failed: duplicate value '"
+                            + reordered_values[col_idx].ToString() + "' for column '"
+                            + index->col_name_ + "' in table '" + plan_->table_name_ + "'");
                     }
                 }
             }
